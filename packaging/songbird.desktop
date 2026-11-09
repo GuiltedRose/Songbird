@@ -1,0 +1,8 @@
+[Desktop Entry]
+Name=Songbird
+Comment=Offline live-coded audio and singing workstation
+Exec=songbird
+Terminal=false
+Type=Application
+Categories=AudioVideo;Audio;AudioVideoEditing;
+Keywords=Music;Recording;Synthesis;Live Coding;

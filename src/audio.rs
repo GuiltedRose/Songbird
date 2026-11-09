@@ -1,0 +1,508 @@
+use crate::{codec, engine::Renderer};
+use anyhow::{Context, Result, bail, ensure};
+use cpal::traits::{DeviceTrait, HostTrait, StreamTrait};
+use std::{
+    path::{Path, PathBuf},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
+        mpsc::{self, SyncSender},
+    },
+    thread::{self, JoinHandle},
+    time::Duration,
+};
+#[derive(Default)]
+pub struct Meters {
+    pub peak: AtomicU32,
+    pub frames: AtomicU64,
+    pub underruns: AtomicU64,
+    pub dropped: AtomicU64,
+    pub clipped: AtomicU64,
+    pub device_error: AtomicBool,
+    pub stopped: AtomicBool,
+    pub drained: AtomicBool,
+    pub edit_missed: AtomicBool,
+    pub finished: AtomicBool,
+}
+impl Meters {
+    pub fn peak(&self) -> f32 {
+        f32::from_bits(self.peak.swap(0, Ordering::Relaxed))
+    }
+    fn update(&self, x: [f32; 2]) {
+        let p = x[0].abs().max(x[1].abs());
+        self.peak.fetch_max(p.to_bits(), Ordering::Relaxed);
+        if p >= 1. {
+            self.clipped.fetch_add(1, Ordering::Relaxed);
+        }
+    }
+}
+pub fn devices() -> Result<Vec<String>> {
+    let h = cpal::default_host();
+    let mut out = vec![];
+    for d in h.input_devices()? {
+        out.push(format!("input: {}", d.name()?));
+    }
+    for d in h.output_devices()? {
+        out.push(format!("output: {}", d.name()?));
+    }
+    Ok(out)
+}
+fn device(input: bool, name: Option<&str>) -> Result<cpal::Device> {
+    let h = cpal::default_host();
+    if let Some(name) = name {
+        let list = if input {
+            h.input_devices()?
+        } else {
+            h.output_devices()?
+        };
+        return list
+            .into_iter()
+            .find(|d| d.name().ok().as_deref() == Some(name))
+            .ok_or_else(|| anyhow::anyhow!("device unavailable: {name}"));
+    }
+    if input {
+        h.default_input_device()
+    } else {
+        h.default_output_device()
+    }
+    .context("no audio device available")
+}
+fn config(
+    d: &cpal::Device,
+    input: bool,
+    rate: u32,
+    channels: Option<u16>,
+) -> Result<(cpal::StreamConfig, cpal::SampleFormat)> {
+    let configs: Vec<_> = if input {
+        d.supported_input_configs()?.collect()
+    } else {
+        d.supported_output_configs()?.collect()
+    };
+    let mut configs = configs
+        .into_iter()
+        .filter(|c| {
+            [1, 2].contains(&c.channels())
+                && channels.is_none_or(|n| n == c.channels())
+                && c.min_sample_rate().0 <= rate
+                && c.max_sample_rate().0 >= rate
+        })
+        .collect::<Vec<_>>();
+    configs.sort_by_key(|c| {
+        (
+            c.sample_format() != cpal::SampleFormat::F32,
+            c.channels() != 2,
+        )
+    });
+    let c = (*configs.first().context(
+        "device does not support requested rate/channel count; change project rate or device",
+    )?)
+    .with_sample_rate(cpal::SampleRate(rate));
+    Ok((c.config(), c.sample_format()))
+}
+fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
+    d: &cpal::Device,
+    c: &cpal::StreamConfig,
+    mut rx: rtrb::Consumer<[f32; 2]>,
+    state: Arc<Meters>,
+) -> Result<cpal::Stream> {
+    let channels = c.channels as usize;
+    let err = state.clone();
+    Ok(d.build_output_stream(
+        c,
+        move |data: &mut [T], _| {
+            let mut missed = false;
+            for out in data.chunks_mut(channels) {
+                let x = if state.stopped.load(Ordering::Relaxed) {
+                    [0.; 2]
+                } else {
+                    match rx.pop() {
+                        Ok(x) => {
+                            state.frames.fetch_add(1, Ordering::Relaxed);
+                            x
+                        }
+                        Err(_) => {
+                            if !state.finished.load(Ordering::Relaxed) {
+                                missed = true;
+                            } else {
+                                state.drained.store(true, Ordering::Relaxed);
+                            }
+                            [0.; 2]
+                        }
+                    }
+                };
+                state.update(x);
+                for (ch, v) in out.iter_mut().enumerate() {
+                    let x = if channels == 1 {
+                        (x[0] + x[1]) * 0.5
+                    } else {
+                        x[ch]
+                    };
+                    *v = T::from_sample(x.clamp(-1., 1.));
+                }
+            }
+            if missed {
+                state.underruns.fetch_add(1, Ordering::Relaxed);
+            }
+        },
+        move |_| {
+            err.device_error.store(true, Ordering::Relaxed);
+            err.stopped.store(true, Ordering::Relaxed);
+        },
+        None,
+    )?)
+}
+fn output_stream(
+    d: &cpal::Device,
+    c: &cpal::StreamConfig,
+    format: cpal::SampleFormat,
+    rx: rtrb::Consumer<[f32; 2]>,
+    state: Arc<Meters>,
+) -> Result<cpal::Stream> {
+    match format {
+        cpal::SampleFormat::F32 => output::<f32>(d, c, rx, state),
+        cpal::SampleFormat::I16 => output::<i16>(d, c, rx, state),
+        cpal::SampleFormat::U16 => output::<u16>(d, c, rx, state),
+        cpal::SampleFormat::I32 => output::<i32>(d, c, rx, state),
+        cpal::SampleFormat::F64 => output::<f64>(d, c, rx, state),
+        _ => bail!("unsupported device sample format {format}"),
+    }
+}
+#[derive(Clone)]
+pub struct LiveContext {
+    pub state: Arc<Meters>,
+    pub bar: u64,
+    pub rate: u32,
+}
+impl LiveContext {
+    pub fn preroll(&self, next: &mut Renderer) -> Result<()> {
+        ensure!(
+            next.score.rate == self.rate,
+            "stop playback before changing sample rate"
+        );
+        // Complete effect-history preroll on the preparation worker, never the playback feeder.
+        for _ in 0..8 {
+            ensure!(
+                !self.state.stopped.load(Ordering::Relaxed),
+                "playback stopped during live evaluation"
+            );
+            let ahead = self.state.frames.load(Ordering::Relaxed) + 16384 + self.bar;
+            let target = ahead.div_ceil(self.bar) * self.bar;
+            ensure!(
+                target < next.length,
+                "new arrangement ends before live boundary; stop and play it"
+            );
+            next.seek(target)?;
+            if self.state.frames.load(Ordering::Relaxed) + 16384 < target {
+                return Ok(());
+            }
+        }
+        bail!("live preparation cannot keep up; stop playback before applying this edit")
+    }
+}
+pub struct Playback {
+    stream: Option<cpal::Stream>,
+    worker: Option<JoinHandle<Result<()>>>,
+    pub state: Arc<Meters>,
+    replace: SyncSender<Renderer>,
+    pub rate: u32,
+    pub bar: u64,
+}
+impl Playback {
+    pub fn start(mut renderer: Renderer, name: Option<&str>) -> Result<Self> {
+        let rate = renderer.score.rate;
+        let bar = renderer.bar_frames().max(1);
+        let d = device(false, name)?;
+        let (c, format) = config(&d, false, rate, None)?;
+        let (mut tx, rx) = rtrb::RingBuffer::new(16384);
+        let state = Arc::new(Meters::default());
+        let mut block = [[0.; 2]; 1024];
+        for _ in 0..4 {
+            let n = renderer.block(&mut block)?;
+            for x in &block[..n] {
+                tx.push(*x)
+                    .map_err(|_| anyhow::anyhow!("prefill overflow"))?;
+            }
+        }
+        let stream = output_stream(&d, &c, format, rx, state.clone())?;
+        let (replace, changes) = mpsc::sync_channel::<Renderer>(1);
+        let s = state.clone();
+        let worker = thread::spawn(move || -> Result<()> {
+            let result = (|| -> Result<()> {
+                let mut pending = None;
+                loop {
+                    if s.stopped.load(Ordering::Relaxed) {
+                        break;
+                    }
+                    if let Ok(new) = changes.try_recv() {
+                        pending = Some(new);
+                    }
+                    if pending
+                        .as_ref()
+                        .is_some_and(|next: &Renderer| next.position < renderer.position)
+                    {
+                        pending = None;
+                        s.edit_missed.store(true, Ordering::Relaxed);
+                    }
+                    if pending
+                        .as_ref()
+                        .is_some_and(|next: &Renderer| next.position == renderer.position)
+                    {
+                        renderer = pending.take().unwrap();
+                    }
+                    let boundary = renderer.bar_frames().max(1);
+                    let n = ((boundary - renderer.position % boundary).min(1024)) as usize;
+                    let n = renderer.block(&mut block[..n])?;
+                    if n == 0 {
+                        break;
+                    }
+                    for x in &block[..n] {
+                        while tx.is_full() {
+                            if s.stopped.load(Ordering::Relaxed) {
+                                return Ok(());
+                            }
+                            thread::sleep(Duration::from_millis(2));
+                        }
+                        tx.push(*x)
+                            .map_err(|_| anyhow::anyhow!("audio queue disconnected"))?;
+                    }
+                }
+                Ok(())
+            })();
+            s.finished.store(true, Ordering::Relaxed);
+            if result.is_err() {
+                s.device_error.store(true, Ordering::Relaxed);
+            }
+            result
+        });
+        if let Err(e) = stream.play() {
+            state.stopped.store(true, Ordering::Relaxed);
+            let _ = worker.join();
+            return Err(e.into());
+        }
+        Ok(Self {
+            stream: Some(stream),
+            worker: Some(worker),
+            state,
+            replace,
+            rate,
+            bar,
+        })
+    }
+    pub fn live_context(&self) -> LiveContext {
+        LiveContext {
+            state: self.state.clone(),
+            bar: self.bar,
+            rate: self.rate,
+        }
+    }
+    pub fn replace(&self, renderer: Renderer) -> Result<()> {
+        ensure!(
+            renderer.score.rate == self.rate,
+            "stop playback before changing sample rate"
+        );
+        self.replace
+            .try_send(renderer)
+            .map_err(|_| anyhow::anyhow!("a live edit is already queued"))
+    }
+    pub fn stop(&mut self) -> Result<()> {
+        self.state.stopped.store(true, Ordering::Relaxed);
+        self.stream.take();
+        if let Some(w) = self.worker.take() {
+            w.join()
+                .map_err(|_| anyhow::anyhow!("playback worker panicked"))??;
+        }
+        Ok(())
+    }
+}
+impl Drop for Playback {
+    fn drop(&mut self) {
+        let _ = self.stop();
+    }
+}
+fn input<T: cpal::SizedSample + cpal::Sample>(
+    d: &cpal::Device,
+    c: &cpal::StreamConfig,
+    mut tx: rtrb::Producer<[f32; 2]>,
+    mut monitor: Option<rtrb::Producer<[f32; 2]>>,
+    s: Arc<Meters>,
+) -> Result<cpal::Stream>
+where
+    f32: cpal::FromSample<T>,
+{
+    let ch = c.channels as usize;
+    let err = s.clone();
+    Ok(d.build_input_stream(
+        c,
+        move |data: &[T], _| {
+            if s.stopped.load(Ordering::Relaxed) {
+                return;
+            }
+            for frame in data.chunks_exact(ch) {
+                let x = [
+                    frame[0].to_sample::<f32>(),
+                    frame[ch - 1].to_sample::<f32>(),
+                ];
+                s.update(x);
+                s.frames.fetch_add(1, Ordering::Relaxed);
+                if tx.push(x).is_err() {
+                    s.dropped.fetch_add(1, Ordering::Relaxed);
+                }
+                if let Some(m) = &mut monitor {
+                    let _ = m.push(x);
+                }
+            }
+        },
+        move |_| {
+            err.device_error.store(true, Ordering::Relaxed);
+            err.stopped.store(true, Ordering::Relaxed);
+        },
+        None,
+    )?)
+}
+struct RecordingDone(Arc<Meters>);
+impl Drop for RecordingDone {
+    fn drop(&mut self) {
+        self.0.stopped.store(true, Ordering::Relaxed);
+        self.0.finished.store(true, Ordering::Relaxed);
+    }
+}
+pub struct Recording {
+    stream: Option<cpal::Stream>,
+    monitor: Option<cpal::Stream>,
+    worker: Option<JoinHandle<Result<PathBuf>>>,
+    pub state: Arc<Meters>,
+    pub take: PathBuf,
+}
+#[derive(Clone, Copy)]
+pub struct RecordingConfig<'a> {
+    pub name: &'a str,
+    pub format: &'a str,
+    pub rate: u32,
+    pub bits: u16,
+    pub channels: u16,
+    pub input_name: Option<&'a str>,
+    pub output_name: Option<&'a str>,
+    pub monitoring: bool,
+}
+impl Recording {
+    pub fn start(root: &Path, settings: &RecordingConfig<'_>) -> Result<Self> {
+        let RecordingConfig {
+            name,
+            format,
+            rate,
+            bits,
+            channels,
+            input_name,
+            output_name,
+            monitoring,
+        } = *settings;
+        ensure!(
+            ["wav", "flac"].contains(&format),
+            "record format must be wav or flac"
+        );
+        let take = codec::unique(&root.join("recordings"), name, "wav")?;
+        let encoder = codec::Encoder::create(&take, rate, channels, bits)?;
+        let d = device(true, input_name)?;
+        let (c, f) = config(&d, true, rate, Some(channels))?;
+        let (tx, mut rx) = rtrb::RingBuffer::new(32768);
+        let state = Arc::new(Meters::default());
+        let (monitor_tx, monitor) = if monitoring {
+            let (mt, mr) = rtrb::RingBuffer::new(8192);
+            let d = device(false, output_name)?;
+            let (c, f) = config(&d, false, rate, None)?;
+            let stream = output_stream(&d, &c, f, mr, Arc::new(Meters::default()))?;
+            (Some(mt), Some(stream))
+        } else {
+            (None, None)
+        };
+        let stream = match f {
+            cpal::SampleFormat::F32 => input::<f32>(&d, &c, tx, monitor_tx, state.clone())?,
+            cpal::SampleFormat::I16 => input::<i16>(&d, &c, tx, monitor_tx, state.clone())?,
+            cpal::SampleFormat::U16 => input::<u16>(&d, &c, tx, monitor_tx, state.clone())?,
+            cpal::SampleFormat::I32 => input::<i32>(&d, &c, tx, monitor_tx, state.clone())?,
+            cpal::SampleFormat::F64 => input::<f64>(&d, &c, tx, monitor_tx, state.clone())?,
+            _ => bail!("unsupported input sample format {f}"),
+        };
+        let s = state.clone();
+        let path = take.clone();
+        let final_flac = format == "flac";
+        let root = root.to_path_buf();
+        let worker = thread::spawn(move || -> Result<PathBuf> {
+            let _done = RecordingDone(s.clone());
+            let mut encoder = encoder;
+            let result = (|| -> Result<()> {
+                let mut block = Vec::with_capacity(1024);
+                loop {
+                    while let Ok(frame) = rx.pop() {
+                        block.push(frame);
+                        if block.len() == 1024 {
+                            encoder.write(&block)?;
+                            block.clear();
+                        }
+                    }
+                    if s.stopped.load(Ordering::Relaxed) && rx.is_empty() {
+                        break;
+                    }
+                    thread::sleep(Duration::from_millis(2));
+                }
+                encoder.write(&block)?;
+                Ok(())
+            })();
+            let finalized = encoder.finish();
+            result?;
+            finalized?;
+            ensure!(
+                s.dropped.load(Ordering::Relaxed) == 0,
+                "recording buffer overrun; incomplete take preserved at {}",
+                path.display()
+            );
+            ensure!(
+                !s.device_error.load(Ordering::Relaxed),
+                "device lost; partial take preserved at {}",
+                path.display()
+            );
+            ensure!(
+                s.frames.load(Ordering::Relaxed) > 0,
+                "no input received; empty take preserved"
+            );
+            if final_flac {
+                let output = path.with_extension("flac");
+                codec::convert(&path, &output, &root.join("cache"), rate, bits)?;
+                Ok(output)
+            } else {
+                Ok(path)
+            }
+        });
+        let recording = Self {
+            stream: Some(stream),
+            monitor,
+            worker: Some(worker),
+            state,
+            take,
+        };
+        if let Some(m) = &recording.monitor {
+            m.play()?;
+        }
+        if let Err(e) = recording.stream.as_ref().unwrap().play() {
+            recording.state.stopped.store(true, Ordering::Relaxed);
+            return Err(e.into());
+        }
+        Ok(recording)
+    }
+    pub fn finish(mut self) -> JoinHandle<Result<PathBuf>> {
+        self.state.stopped.store(true, Ordering::Relaxed);
+        self.stream.take();
+        self.monitor.take();
+        self.worker.take().unwrap()
+    }
+}
+impl Drop for Recording {
+    fn drop(&mut self) {
+        self.state.stopped.store(true, Ordering::Relaxed);
+        self.stream.take();
+        self.monitor.take();
+        if let Some(w) = self.worker.take() {
+            let _ = w.join();
+        }
+    }
+}
