@@ -1020,14 +1020,45 @@ pub fn command(root: &Path, args: &[String]) -> Result<Vec<String>> {
             !pending.is_empty(),
             "pack needs languages/*.toml and/or locales/*.toml"
         );
-        for (source, target) in &pending {
-            fs::create_dir_all(target.parent().unwrap())?;
-            let mut out = fs::OpenOptions::new()
-                .create_new(true)
-                .write(true)
-                .open(target)?;
-            std::io::copy(&mut fs::File::open(source)?, &mut out)?;
-            out.sync_all()?;
+        // Validate all destinations before writing; failed installs remove only files
+        // created by this invocation. Existing packs are never replaced.
+        let mut targets = BTreeSet::new();
+        for (_, target) in &pending {
+            ensure!(
+                targets.insert(target.clone()),
+                "resource pack destination collision"
+            );
+        }
+        fs::create_dir_all(&dest)?;
+        let mut created = Vec::new();
+        let installed: Result<()> = (|| {
+            for (source, target) in &pending {
+                let relative_parent = target.parent().unwrap().strip_prefix(&dest)?;
+                crate::codec::directory(&dest, &crate::codec::script_path(relative_parent))?;
+                let mut out = fs::OpenOptions::new()
+                    .create_new(true)
+                    .write(true)
+                    .open(target)?;
+                created.push(target.clone());
+                std::io::copy(&mut fs::File::open(source)?, &mut out)?;
+                out.sync_all()?;
+            }
+            Ok(())
+        })();
+        if let Err(error) = installed {
+            let mut leftovers = Vec::new();
+            for file in created.into_iter().rev() {
+                if let Err(cleanup) = fs::remove_file(&file) {
+                    leftovers.push(format!("{}: {cleanup}", file.display()));
+                }
+            }
+            if !leftovers.is_empty() {
+                return Err(error.context(format!(
+                    "incomplete install cleanup: {}",
+                    leftovers.join("; ")
+                )));
+            }
+            return Err(error);
         }
         return Ok(vec![format!(
             "Installed {} resource files; no downloads or voice recordings were inferred",

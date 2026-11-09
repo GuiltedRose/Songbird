@@ -114,3 +114,16 @@ fn procedural_bank_has_provenance_and_never_overwrites() {
     assert_eq!(fs::read(&manifest).unwrap(), before);
     assert!(procedural::generate(&f.0, &path, "replacement", &selection("la")).is_err());
 }
+
+#[test]
+fn english_stress_and_manual_melisma_remain_distinct() {
+    let f = Fixture::new();
+    let context = phonetics::ContextProfile::legacy(&f.0).unwrap();
+    let spoken = context.pronounce("hello", &BTreeMap::new()).unwrap();
+    assert!(spoken.syllables.iter().any(|s| s.stress == Some(1)));
+    let manual = context.pronounce("@M.IY1 ~!", &BTreeMap::new()).unwrap();
+    assert_eq!(manual.syllables.len(), 2);
+    assert_eq!(manual.syllables[0].stress, Some(1));
+    assert_eq!(manual.syllables[1].phones, vec!["~"]);
+    assert_eq!(manual.phrase_marks.len(), 1);
+}

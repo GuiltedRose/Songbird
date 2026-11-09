@@ -58,8 +58,16 @@ impl Renderer {
                         .or(voice.language.clone())
                         .or(score.language.clone())
                         .or(defaults.language.clone()),
-                    inventory: voice.inventory.clone().or(defaults.inventory.clone()),
-                    provider: voice.provider.clone().or(defaults.provider.clone()),
+                    inventory: voice
+                        .inventory
+                        .clone()
+                        .or(score.inventory.clone())
+                        .or(defaults.inventory.clone()),
+                    provider: voice
+                        .provider
+                        .clone()
+                        .or(score.provider.clone())
+                        .or(defaults.provider.clone()),
                 };
                 voice.bank = crate::procedural::default_bank(root, &selected)?;
             }
