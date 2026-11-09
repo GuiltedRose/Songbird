@@ -224,3 +224,27 @@ fi
 Rollback changes only the launcher. Keep the release directories, project data,
 recorded takes, and immutable save generations. Version 1 project metadata is
 validated on open; unsupported versions fail instead of performing migrations.
+
+## Voicebank Studio acceptance
+
+Use [Creating Your First Voicebank](FIRST_VOICEBANK.md) for the integrated
+recording/preparation workflow and [the Studio reference](VOICEBANKS.md) for all
+commands. To validate the supplied generated example without hardware:
+
+```sh
+./target/release/songbird check examples/voicebank-studio
+./target/release/songbird voice-check examples/voicebank-studio voices/studio-synthetic
+./target/release/songbird gui-smoke examples/voicebank-studio voices/studio-synthetic
+./target/release/songbird render examples/voicebank-studio /absolute/new/studio-check.flac
+```
+
+A three-frame Studio smoke is not an interactive recording or quality check.
+For hardware acceptance, record M/IY/S (or a complete short phrase's required
+phones) using your microphone. Check alternate takes, clipping/quiet warnings,
+raw/prepared replay, manual timing/root correction, publication, lyric/pitch/style
+coverage, a sung preview, then a harmony preset in a saved composition. Export
+WAV/FLAC, reopen/reimport the bank in another project, and listen for intelligibility,
+pitch stability, consonants and transition artifacts. Repeat across intended
+registers/styles and device rates. Do not use the generated example as a substitute
+for these checks. Interrupted recordings remain in the bank's recordings folder;
+capture receipts retain their target/profile/path for recovery and manual import.

@@ -14,6 +14,14 @@ pub struct Bank {
     pub samples: Vec<Phoneme>,
     #[serde(default)]
     pub dictionary: BTreeMap<String, String>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub inventory: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+    #[serde(default)]
+    pub generation: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Phoneme {
@@ -24,12 +32,19 @@ pub struct Phoneme {
     pub high: i32,
     pub onset: f64,
     pub sustain: f64,
+    #[serde(default)]
+    pub release: Option<f64>,
     pub end: f64,
     pub voiced: bool,
     #[serde(default = "normal")]
     pub style: String,
     #[serde(default)]
     pub register: String,
+    #[serde(default = "one")]
+    pub gain: f32,
+}
+fn one() -> f32 {
+    1.
 }
 fn normal() -> String {
     "normal".into()
@@ -37,6 +52,49 @@ fn normal() -> String {
 pub struct LoadedBank {
     pub meta: Bank,
     pub audio: Vec<Asset>,
+    pub profile: crate::phonetics::ContextProfile,
+}
+pub(crate) fn validate_sample(p: &Phoneme, a: &Asset) -> Result<()> {
+    ensure!(
+        crate::phonetics::lexical_label(&p.phoneme),
+        "invalid phoneme identifier or compound label"
+    );
+    ensure!(
+        p.root.is_finite()
+            && (40.0..=2000.).contains(&p.root)
+            && p.low >= 0
+            && p.high <= 127
+            && p.low <= p.high,
+        "invalid pitch mapping"
+    );
+    ensure!(
+        p.onset.is_finite()
+            && p.sustain.is_finite()
+            && p.end.is_finite()
+            && p.onset >= 0.
+            && p.sustain >= p.onset
+            && p.end > p.sustain
+            && p.end <= a.duration(),
+        "invalid timings for {}",
+        p.phoneme
+    );
+    ensure!(
+        p.release
+            .is_none_or(|r| r.is_finite() && r >= p.sustain && r <= p.end),
+        "invalid release timing for {}",
+        p.phoneme
+    );
+    ensure!(
+        p.gain.is_finite() && (0.0..=16.).contains(&p.gain),
+        "sample gain range 0..16"
+    );
+    if p.voiced {
+        ensure!(
+            p.release.unwrap_or(p.end) - p.sustain >= 3. / p.root,
+            "voiced sustain needs at least three periods"
+        );
+    }
+    Ok(())
 }
 impl LoadedBank {
     pub fn load(root: &Path, voice: &Voice, cache: &Path) -> Result<Self> {
@@ -55,60 +113,47 @@ impl LoadedBank {
             "voicebank needs 1..2048 samples"
         );
         let bank_root = manifest.parent().unwrap();
+        let profile = crate::phonetics::bank_context(bank_root, &meta)?;
+        let mut meta = meta;
+        for p in &mut meta.samples {
+            p.phoneme = profile.inventory.label(&p.phoneme)?;
+        }
         let mut audio = vec![];
         for p in &meta.samples {
-            ensure!(
-                p.phoneme.len() <= 16 && p.phoneme.chars().all(|c| c.is_ascii_uppercase()),
-                "use uppercase ARPABET phoneme labels"
-            );
-            ensure!(
-                p.root.is_finite()
-                    && (40.0..=2000.).contains(&p.root)
-                    && p.low >= 0
-                    && p.high <= 127
-                    && p.low <= p.high,
-                "invalid pitch mapping"
-            );
             let a = Asset::decode(&safe_path(bank_root, &p.file)?, cache)
                 .with_context(|| format!("phoneme {}", p.phoneme))?;
-            ensure!(
-                p.onset.is_finite()
-                    && p.sustain.is_finite()
-                    && p.end.is_finite()
-                    && p.onset >= 0.
-                    && p.sustain >= p.onset
-                    && p.end > p.sustain
-                    && p.end <= a.duration(),
-                "invalid timings for {}",
-                p.phoneme
-            );
-            if p.voiced {
-                ensure!(
-                    p.end - p.sustain >= 3. / p.root,
-                    "voiced sustain needs at least three periods"
-                );
-            }
+            validate_sample(p, &a)?;
             audio.push(a);
         }
-        Ok(Self { meta, audio })
+        Ok(Self {
+            meta,
+            audio,
+            profile,
+        })
     }
-    fn choose(&self, phone: &str, note: i32, voice: &Voice, track: &Track) -> Result<usize> {
+    pub(crate) fn choose(
+        &self,
+        phone: &str,
+        note: f64,
+        voice: &Voice,
+        track: &Track,
+    ) -> Result<usize> {
         self.meta
             .samples
             .iter()
             .enumerate()
             .filter(|(_, p)| {
                 p.phoneme == phone
-                    && note >= p.low
-                    && note <= p.high
+                    && note >= p.low as f64
+                    && note <= p.high as f64
                     && (voice.register.is_empty() || p.register == voice.register)
                     && p.style == track.expression
             })
             .min_by(|(_, a), (_, b)| {
-                (dsp::hz(note as f64) / a.root)
+                (dsp::hz(note) / a.root)
                     .ln()
                     .abs()
-                    .total_cmp(&(dsp::hz(note as f64) / b.root).ln().abs())
+                    .total_cmp(&(dsp::hz(note) / b.root).ln().abs())
             })
             .map(|(i, _)| i)
             .ok_or_else(|| {
@@ -129,6 +174,7 @@ pub struct VocalUnit {
     pub vowel: bool,
     pub phase: f64,
     pub last_time: f64,
+    pub sustain_only: bool,
 }
 pub fn phonemes(lyrics: &str, dictionary: &BTreeMap<String, String>) -> Result<Vec<Vec<String>>> {
     let mut result = vec![];
@@ -193,7 +239,7 @@ fn builtin(word: &str) -> Option<&'static str> {
         _ => return None,
     })
 }
-fn vowel(p: &str) -> bool {
+pub fn vowel(p: &str) -> bool {
     [
         "AA", "AE", "AH", "AO", "AW", "AY", "EH", "ER", "EY", "IH", "IY", "OW", "OY", "UH", "UW",
     ]
@@ -206,7 +252,9 @@ pub fn align(
     events: &[Event],
     tempo: f64,
 ) -> Result<Vec<VocalUnit>> {
-    let syllables = phonemes(&track.lyrics, &bank.meta.dictionary)?;
+    let syllables = bank
+        .profile
+        .phonemes(&track.lyrics, &bank.meta.dictionary)?;
     let notes = events
         .iter()
         .filter(|e| !e.notes.is_empty())
@@ -219,6 +267,7 @@ pub fn align(
     );
     let mut units = vec![];
     let mut last_vowel: Option<String> = None;
+    let mut last_source: Option<String> = None;
     for (phones, event) in syllables.iter().zip(notes) {
         ensure!(event.notes.len() == 1, "singer notes must be monophonic");
         let midi = event.notes[0] + track.transpose;
@@ -229,37 +278,95 @@ pub fn align(
                 .as_ref()
                 .ok_or_else(|| anyhow::anyhow!("melisma needs a preceding vowel"))?;
             units.push(VocalUnit {
-                sample: bank.choose(phone, midi, voice, track)?,
+                sample: bank
+                    .choose(phone, midi as f64 + track.vocal_pitch as f64, voice, track)
+                    .or_else(|error| match &last_source {
+                        Some(label) => {
+                            bank.choose(label, midi as f64 + track.vocal_pitch as f64, voice, track)
+                        }
+                        None => Err(error),
+                    })?,
+                start: (start - (bank.profile.pronunciation.timing.crossfade_ms / 1000.)).max(0.),
+                end: start + duration + (bank.profile.pronunciation.timing.crossfade_ms / 1000.),
+                midi,
+                vowel: true,
+                phase: 0.,
+                last_time: -1.,
+                sustain_only: true,
+            });
+            continue;
+        }
+        ensure!(
+            phones.iter().any(|p| bank.profile.inventory.nucleus(p))
+                || bank.profile.pronunciation.timing.allow_consonant_syllables,
+            "syllable needs a nucleus in the selected inventory"
+        );
+        let combined = phones.join(".");
+        if phones.len() > 1
+            && let Ok(sample) = bank.choose(
+                &combined,
+                midi as f64 + track.vocal_pitch as f64,
+                voice,
+                track,
+            )
+        {
+            last_vowel = phones
+                .iter()
+                .rev()
+                .find(|p| bank.profile.inventory.nucleus(p))
+                .cloned();
+            last_source = Some(combined.clone());
+            units.push(VocalUnit {
+                sample,
                 start,
                 end: start + duration,
                 midi,
                 vowel: true,
                 phase: 0.,
                 last_time: -1.,
+                sustain_only: false,
             });
             continue;
         }
-        ensure!(phones.iter().any(|p| vowel(p)), "syllable needs a vowel");
-        let consonants = phones.iter().filter(|p| !vowel(p)).count();
-        let consonant = (duration * 0.35 / (consonants.max(1) as f64)).min(0.075);
+        let consonants = phones
+            .iter()
+            .filter(|p| !bank.profile.inventory.nucleus(p))
+            .count();
+        let consonant = (duration * bank.profile.pronunciation.timing.consonant_fraction
+            / (consonants.max(1) as f64))
+            .min(bank.profile.pronunciation.timing.consonant_max);
         let vowels = phones.len() - consonants;
-        let vowel_len = (duration - consonant * consonants as f64) / vowels as f64;
+        let vowel_len = (duration - consonant * consonants as f64) / vowels.max(1) as f64;
         let mut at = start;
         for phone in phones {
-            let is_vowel = vowel(phone);
-            let len = if is_vowel { vowel_len } else { consonant };
-            let index = bank.choose(phone, midi, voice, track)?;
+            let is_vowel = bank.profile.inventory.nucleus(phone)
+                || (vowels == 0
+                    && bank
+                        .profile
+                        .inventory
+                        .phone(phone)
+                        .is_some_and(|p| p.voiced));
+            let len = if vowels == 0 {
+                duration / phones.len() as f64
+            } else if is_vowel {
+                vowel_len
+            } else {
+                consonant
+            };
+            let index = bank.choose(phone, midi as f64 + track.vocal_pitch as f64, voice, track)?;
             if is_vowel {
                 last_vowel = Some(phone.clone());
+                last_source = Some(phone.clone());
             }
             units.push(VocalUnit {
                 sample: index,
-                start: (at - 0.004).max(0.),
-                end: at + len + 0.004,
+                start: (at - (bank.profile.pronunciation.timing.crossfade_ms / 1000.)).max(0.),
+                end: at + len + (bank.profile.pronunciation.timing.crossfade_ms / 1000.),
                 midi,
                 vowel: is_vowel,
                 phase: 0.,
                 last_time: -1.,
+                sustain_only: false,
             });
             at += len;
         }
@@ -280,11 +387,13 @@ pub fn sample(
     let a = &mut bank.audio[unit.sample];
     let t = time - unit.start;
     let duration = unit.end - unit.start;
-    let edge = (t / 0.008).min((duration - t) / 0.008).clamp(0., 1.) as f32;
+    let fade = (bank.profile.pronunciation.timing.crossfade_ms / 500.).max(1e-8);
+    let edge = (t / fade).min((duration - t) / fade).clamp(0., 1.) as f32;
     let mut out = if p.voiced && unit.vowel {
         let target = dsp::hz(
             unit.midi as f64
                 + bend as f64
+                + track.vocal_pitch as f64
                 + track.vibrato as f64 * 0.5 * (std::f64::consts::TAU * 5.5 * t).sin(),
         );
         let target_period = 1. / target;
@@ -301,18 +410,29 @@ pub fn sample(
         let grain = unit.phase.round() as i64;
         let mut sum = [0.; 2];
         let mut weight = 0.;
-        for g in grain - 4..=grain + 4 {
+        let grains = (target / (p.root * track.formant as f64))
+            .ceil()
+            .clamp(2., 64.) as i64
+            + 1;
+        for g in grain - grains..=grain + grains {
             let center = t + (g as f64 - unit.phase) * target_period;
             let offset = t - center;
-            if offset.abs() >= source_period {
+            if offset.abs() * track.formant as f64 >= source_period {
                 continue;
             }
             let progress = (center / duration).clamp(0., 1.);
-            let natural = p.sustain + progress * (p.end - p.sustain - 2. * source_period).max(0.);
+            let natural = p.sustain
+                + progress * (p.release.unwrap_or(p.end) - p.sustain - 2. * source_period).max(0.);
             let source_center =
                 p.sustain + ((natural - p.sustain) / source_period).round() * source_period;
-            let frame = a.sample((source_center + offset) * a.rate as f64, 1.)?;
-            let w = (0.5 + 0.5 * (std::f64::consts::PI * offset / source_period).cos()) as f32;
+            let frame = a.sample(
+                (source_center + offset * track.formant as f64) * a.rate as f64,
+                track.formant as f64,
+            )?;
+            let w = (0.5
+                + 0.5
+                    * (std::f64::consts::PI * offset * track.formant as f64 / source_period).cos())
+                as f32;
             sum[0] += frame[0] * w;
             sum[1] += frame[1] * w;
             weight += w;
@@ -321,14 +441,68 @@ pub fn sample(
             sum[0] /= weight;
             sum[1] /= weight;
         }
+        let attack = if unit.sustain_only {
+            0.
+        } else {
+            (p.sustain - p.onset).min(duration * 0.25)
+        };
+        let tail = if unit.sustain_only {
+            0.
+        } else {
+            (p.end - p.release.unwrap_or(p.end)).min(duration * 0.25)
+        };
+        if attack > 0. && t < attack {
+            let raw = a.sample(
+                (p.onset + t * (p.sustain - p.onset) / attack) * a.rate as f64,
+                1.,
+            )?;
+            let blend = (t / attack).powi(4) as f32;
+            sum = [
+                raw[0] * (1. - blend) + sum[0] * blend,
+                raw[1] * (1. - blend) + sum[1] * blend,
+            ];
+        }
+        if tail > 0. && t > duration - tail {
+            let f = ((t - duration + tail) / tail).clamp(0., 1.);
+            let at = p.release.unwrap_or(p.end) + f * (p.end - p.release.unwrap_or(p.end));
+            let raw = a.sample(at * a.rate as f64, 1.)?;
+            let blend = f as f32;
+            sum = [
+                sum[0] * (1. - blend) + raw[0] * blend,
+                sum[1] * (1. - blend) + raw[1] * blend,
+            ];
+        }
         sum
     } else {
-        let pos = p.onset + (p.end - p.onset) * (t / duration).clamp(0., 1.);
-        a.sample(pos * a.rate as f64, (p.end - p.onset) / duration)?
+        // Preserve a consonant's local spectrum: do not squeeze an entire long
+        // fricative or nasal take into a few milliseconds of a syllable.
+        let speed = if p.voiced {
+            dsp::hz(unit.midi as f64 + bend as f64 + track.vocal_pitch as f64) / p.root
+        } else {
+            1.
+        };
+        let length = p.end - p.onset;
+        let natural = t * speed;
+        let position = if natural < length {
+            p.onset + natural
+        } else if bank
+            .profile
+            .inventory
+            .phone(&p.phoneme)
+            .is_some_and(|p| p.stop)
+        {
+            return Ok([0.; 2]);
+        } else {
+            let from = p.sustain;
+            let to = p.release.unwrap_or(p.end);
+            let span = (to - from).max(1. / a.rate as f64);
+            from + ((natural - length) % span)
+        };
+        a.sample(position * a.rate as f64, speed)?
     };
     let breath = dsp::noise((time * 48000.) as u64, 945) * track.breathiness * 0.025;
     for x in &mut out {
-        *x = (*x + breath) * edge;
+        *x = (*x + breath) * edge * track.dynamics * p.gain;
     }
     Ok(out)
 }
@@ -341,6 +515,10 @@ pub fn write_template(path: &Path, name: &str) -> Result<()> {
         license: "User-supplied recordings; specify your license".into(),
         samples: vec![],
         dictionary: BTreeMap::new(),
+        language: None,
+        inventory: None,
+        provider: None,
+        generation: None,
     };
     std::fs::write(path.join("voicebank.toml"), toml::to_string_pretty(&bank)?)?;
     Ok(())
@@ -350,6 +528,7 @@ pub fn validate(root: &Path, bank: &str) -> Result<String> {
         bank: bank.into(),
         register: String::new(),
         style: String::new(),
+        ..Default::default()
     };
     let b = LoadedBank::load(root, &v, &root.join("cache"))?;
     if b.meta.samples.is_empty() {
@@ -364,6 +543,13 @@ pub fn validate(root: &Path, bank: &str) -> Result<String> {
 
 /// Binary search the pinned CMU dictionary without a heap-resident dictionary index.
 pub fn english(word: &str) -> Option<String> {
+    english_pronunciation(word, false)
+}
+/// Retain lexical stress for language-neutral pronunciation metadata.
+pub fn english_stressed(word: &str) -> Option<String> {
+    english_pronunciation(word, true)
+}
+fn english_pronunciation(word: &str, retain_stress: bool) -> Option<String> {
     const DATA: &str = include_str!(concat!(env!("OUT_DIR"), "/english.dict"));
     let key = word.to_ascii_lowercase();
     let mut low = 0;
@@ -413,7 +599,11 @@ pub fn english(word: &str) -> Option<String> {
                     } else if i > 0 {
                         out.push(' ');
                     }
-                    out.push_str(p);
+                    if retain_stress {
+                        out.push_str(raw.split_whitespace().nth(i)?);
+                    } else {
+                        out.push_str(p);
+                    }
                 }
                 return Some(out);
             }

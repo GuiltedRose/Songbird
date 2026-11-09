@@ -1,0 +1,40 @@
+# Linux: ~/.config/songbird/config.toml (or $XDG_CONFIG_HOME/songbird/config.toml)
+# Windows: %APPDATA%\Songbird\config.toml
+# macOS: ~/Library/Application Support/Songbird/config.toml
+# SONGBIRD_CONFIG overrides the path on every platform.
+# Save this file while Songbird is open: appearance reloads automatically.
+version = 1
+
+[appearance]
+font_size = 14.0
+editor_font_size = 15.0
+window_width = 1120.0  # Initial size; restart to apply window dimensions.
+window_height = 780.0
+show_tracks = true
+show_console = true
+
+[theme]
+base = "dark"        # "dark" or "light"; omitted colors inherit that base.
+background = "#101615"
+panel = "#1a2421"
+text = "#e0ebe6"
+muted = "#879a90"
+accent = "#7de2be"
+selection = "#315e4f"
+keyword = "#70cdb5"
+string = "#d1b878"
+number = "#b69be6"
+waveform = "#5fb9a0"
+recording = "#ff7e86"
+
+# Interface and singing defaults are independent; old banks keep their language.
+[language]
+interface = "auto"
+project_default = "auto"
+pronunciation_default = "auto"
+# resources = "/absolute/path/to/resources"
+# font_file = "/absolute/path/to/font.ttf"
+
+[voicebank]
+default_language = "auto"
+default_inventory = "auto"

@@ -1,0 +1,508 @@
+version = 1
+language = "en"
+name = "English"
+inventory = "en-arpabet"
+provider = "cmudict"
+provider_version = "1"
+license = "BSD-3-Clause; original Songbird starter resource"
+attribution = "Songbird contributors; starter mappings, not a comprehensive pronunciation lexicon"
+capabilities = ["manual", "dictionary", "literal-rules"]
+scripts = ["Unicode"]
+syllabification = "explicit"
+
+[timing]
+consonant_fraction = 0.35
+consonant_max = 0.075
+crossfade_ms = 4.0
+allow_consonant_syllables = false
+
+[dictionary]
+
+[[phones]]
+id = "AA"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Open ah, as in father"
+prompt = "father"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "AE"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Short a, as in cat"
+prompt = "cat"
+formants = [660, 1720, 2410]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "AH"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Uh, as in cup"
+prompt = "cup"
+formants = [500, 1500, 2500]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "AO"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Aw, as in thought; dialects vary"
+prompt = "thought"
+formants = [570, 840, 2410]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "AW"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Ah-to-oo glide, as in mouth"
+prompt = "mouth"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+formants_end = [300, 870, 2240]
+
+[[phones]]
+id = "AY"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Ah-to-ee glide, as in my"
+prompt = "my"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+formants_end = [270, 2290, 3010]
+
+[[phones]]
+id = "B"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Voiced lip stop; capture release into a vowel"
+prompt = "bee"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "CH"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Ch, as in cheese"
+prompt = "cheese"
+manner = "affricate"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "D"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Voiced tongue-tip stop"
+prompt = "day"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "DH"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced th, as in this"
+prompt = "this"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "EH"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Short e, as in bed"
+prompt = "bed"
+formants = [530, 1840, 2480]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ER"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "R-colored vowel, as in bird"
+prompt = "bird"
+formants = [480, 1300, 1700]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "EY"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Ay glide, as in day"
+prompt = "day"
+formants = [400, 2000, 2600]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+formants_end = [270, 2290, 3010]
+
+[[phones]]
+id = "F"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Unvoiced lip/teeth friction"
+prompt = "fee"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "G"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Voiced back-of-mouth stop"
+prompt = "go"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "HH"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Breathy h, as in he"
+prompt = "he"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "IH"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Short i, as in sit"
+prompt = "sit"
+formants = [390, 1990, 2550]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "IY"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Sustained ee, as in see"
+prompt = "see"
+formants = [270, 2290, 3010]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "JH"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "J, as in judge"
+prompt = "judge"
+manner = "affricate"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "K"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Unvoiced back-of-mouth stop"
+prompt = "key"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "L"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "L, as in lee"
+prompt = "lee"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "M"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Closed-lip voiced hum"
+prompt = "me"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "N"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Tongue-tip nasal hum"
+prompt = "knee"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "NG"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Back-of-mouth nasal, as at end of sing"
+prompt = "sing"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "OW"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Oh-to-oo glide"
+prompt = "go"
+formants = [450, 800, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+formants_end = [300, 870, 2240]
+
+[[phones]]
+id = "OY"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Aw-to-ee glide"
+prompt = "boy"
+formants = [570, 840, 2410]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+formants_end = [270, 2290, 3010]
+
+[[phones]]
+id = "P"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Unvoiced lip stop"
+prompt = "pea"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "R"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "English r, as in red"
+prompt = "red"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "S"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Unvoiced s hiss"
+prompt = "see"
+manner = "fricative"
+nasal = false
+noise_cutoff = 4500.0
+
+[[phones]]
+id = "SH"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Unvoiced sh hiss"
+prompt = "she"
+manner = "fricative"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "T"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Unvoiced tongue-tip stop"
+prompt = "tea"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "TH"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Unvoiced th, as in thin"
+prompt = "thin"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "UH"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Short oo, as in book"
+prompt = "book"
+formants = [440, 1020, 2240]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "UW"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Sustained oo, as in blue"
+prompt = "blue"
+formants = [300, 870, 2240]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "V"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced lip/teeth friction"
+prompt = "vee"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "W"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced oo-like onset"
+prompt = "we"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "Y"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced ee-like onset"
+prompt = "yes"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "Z"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced z buzz"
+prompt = "zoo"
+manner = "fricative"
+nasal = false
+noise_cutoff = 4500.0
+
+[[phones]]
+id = "ZH"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Voiced zh, as in vision"
+prompt = "vision"
+manner = "fricative"
+nasal = false
+noise_cutoff = 1800.0
+

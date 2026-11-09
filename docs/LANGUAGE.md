@@ -208,3 +208,50 @@ update misses its prepared boundary, original playback continues and the console
 reports it. Sample-rate changes require stopping playback. Live replacement is
 not a crossfade between arrangements and may click if the new waveform differs
 at the boundary. `bars` must extend beyond the chosen live-update boundary.
+
+## Voicebank Studio and vocal presets
+
+Enter `voicebank help` in the prompt to create, record, analyze, label and test
+voices inside Songbird. Follow [Creating Your First Voicebank](FIRST_VOICEBANK.md)
+or consult the [complete Studio reference](VOICEBANKS.md).
+
+A singer track can load a portable TOML performance preset directly:
+
+```text
+track backing {
+    vocal-preset "voices/nova/preset-Soft-Harmony.toml"
+    lyrics "me see"
+    notes "A3:1 B3:1"
+    gain -12db
+    formant 0.95
+    dynamics 0.8
+    vocal-pitch -0.1
+    harmony "0 7"
+}
+```
+
+The preset supplies the bank/register/expression and other vocal controls. Explicit
+track controls override those settings; track effects follow preset effects.
+`harmony` is a quoted list of semitone offsets and expands to separate singers,
+all of which need bank pitch/profile coverage. `formant` ranges from 0.5 to 2,
+`dynamics` from 0 to 2, and `vocal-pitch` from -24 to 24 semitones. These controls
+also work on ordinary `use voice NAME` tracks. The normal resource limits apply.
+
+## Language selection
+
+Score, voice and track blocks accept `language TAG`, `inventory PROFILE`, and
+`provider cmudict|dictionary|rules|manual` (choose one provider). Explicit track
+settings precede voice settings; physical bank inventories still constrain samples.
+Unannotated legacy banks remain English. Configure new-bank defaults separately
+with `language project TAG` and `language default TAG` in the console.
+
+```text
+language la
+voice latin { bank "default:la"; language la }
+track greeting { use voice latin; notes "C4:1 D4:1"; lyrics "salve" }
+```
+
+`default:TAG` generates a labeled procedural bank when preparing a used voice.
+Punctuation records phrase marks, without allocating notes or adding pauses.
+Write rests explicitly. See [language packs](LANGUAGES.md) and
+[provider/phrasing research](LANGUAGE_RESEARCH.md).

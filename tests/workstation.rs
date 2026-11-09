@@ -42,12 +42,18 @@ impl Fixture {
                 high: 90,
                 onset: 0.,
                 sustain: 0.03,
+                release: None,
                 end: 0.45,
                 voiced: true,
                 style: "normal".into(),
                 register: "alto".into(),
+                gain: 1.,
             }],
             dictionary: BTreeMap::from([("AH".into(), "AA".into())]),
+            language: None,
+            inventory: None,
+            provider: None,
+            generation: None,
         };
         fs::write(
             self.0.join("voices/test/voicebank.toml"),
@@ -312,6 +318,7 @@ fn phonemes_and_alignment() {
         bank: "voices/test".into(),
         register: "alto".into(),
         style: String::new(),
+        ..Default::default()
     };
     let bank = LoadedBank::load(&f.0, &v, &f.0.join("cache")).unwrap();
     assert_eq!(

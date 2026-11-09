@@ -1,20 +1,25 @@
 use crate::{
     audio::{self, Playback, Recording},
+    config::{Config, Palette, Watcher},
     engine::Renderer,
     language,
     project::{History, Project},
+    studio::{self, Capture, View as StudioView},
 };
-use anyhow::{Result, bail, ensure};
-use eframe::egui::{self, Color32, TextFormat};
+use anyhow::{Context, Result, bail, ensure};
+use eframe::egui::{self, TextFormat};
 use std::{
     path::PathBuf,
     sync::mpsc::{self, Receiver, SyncSender},
     thread,
     time::{Duration, Instant},
 };
-const HELP: &str = "play | stop | eval | save | open DIR | save-as DIR | import FILE | render FILE | devices | input NAME | output NAME | record NAME flac|wav | record-stop | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
+const HELP: &str = "play | stop | eval | save | open DIR | save-as DIR | import FILE | render FILE | devices | input NAME | output NAME | record NAME flac|wav | record-stop | voicebank help | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
 pub const DEFAULT: &str = include_str!("../examples/garden/composition.sb");
 enum Job {
+    Language(Project, Vec<String>),
+    Studio(studio::Request),
+    Capture(Project, String, PathBuf, Capture),
     New(Project, PathBuf),
     Convert(Project, String, String, u32, u16),
     Draft(Project),
@@ -27,6 +32,8 @@ enum Job {
     Validate(Project, String),
 }
 enum Reply {
+    Language(Vec<String>),
+    Studio(Box<studio::Output>),
     Drafted,
     Saved(String),
     Prepared(Renderer, String),
@@ -47,6 +54,13 @@ impl Work {
             while let Ok(job) = rx.recv() {
                 let r = (|| -> Result<Reply> {
                     Ok(match job {
+                        Job::Language(project, args) => {
+                            Reply::Language(crate::phonetics::command(&project.root, &args)?)
+                        }
+                        Job::Studio(request) => Reply::Studio(Box::new(studio::execute(request)?)),
+                        Job::Capture(p, bank, path, capture) => {
+                            Reply::Studio(Box::new(studio::finish_capture(p, bank, path, capture)?))
+                        }
                         Job::New(current, path) => {
                             current.save_draft()?;
                             Reply::Project(Project::create(&path, DEFAULT.into())?)
@@ -120,6 +134,17 @@ impl Work {
     }
 }
 pub struct App {
+    catalog: crate::locale::Catalog,
+    help: crate::help::Help,
+    font_attempted: bool,
+    studio: Option<StudioView>,
+    bank_capture: Option<(String, Capture)>,
+    bank_pending: Option<(String, PathBuf, Capture)>,
+    audition: bool,
+    config: Config,
+    palette: Palette,
+    watcher: Watcher,
+    theme_pending: bool,
     project: Project,
     work: Work,
     playback: Option<Playback>,
@@ -156,7 +181,35 @@ impl App {
         let last_evaluated = project.source.clone();
         let preview = language::parse(&project.source).ok();
         let preview_source = project.source.clone();
-        Self {
+        let mut watcher = Watcher::default();
+        let mut warning = None;
+        let config = watcher.load().unwrap_or_else(|e| {
+            warning = Some(format!("CONFIG: {e:#}; using defaults"));
+            Config::default()
+        });
+        let palette = config.palette().expect("validated theme");
+        let catalog = crate::locale::Catalog::load(
+            &config.language.interface,
+            crate::phonetics::resource_root().as_deref(),
+        )
+        .unwrap_or_else(|e| {
+            warning = Some(format!("Language resources: {e:#}; English fallback"));
+            Default::default()
+        });
+        let mut app = Self {
+            catalog,
+            help: Default::default(),
+            font_attempted: false,
+            studio: None,
+            bank_capture: None,
+            bank_pending: None,
+            audition: false,
+            show_tracks: config.appearance.show_tracks,
+            show_console: config.appearance.show_console,
+            config,
+            palette,
+            watcher,
+            theme_pending: true,
             project,
             work: Work::new(),
             playback: None,
@@ -176,8 +229,6 @@ impl App {
             output: None,
             monitor: false,
             channels: 1,
-            show_tracks: true,
-            show_console: true,
             search: String::new(),
             search_open: false,
             search_from: 0,
@@ -189,15 +240,23 @@ impl App {
             smoke_frames: None,
             output_peak: 0.,
             input_peak: 0.,
+        };
+        if let Some(warning) = warning {
+            app.log(warning);
         }
+        app
     }
     fn log(&mut self, s: impl Into<String>) {
-        self.console.push(s.into());
+        self.console.push(self.catalog.message(&s.into()));
         if self.console.len() > 200 {
             self.console.remove(0);
         }
     }
     fn evaluate(&mut self, play: bool) -> Result<()> {
+        ensure!(
+            !self.audition,
+            "stop the voicebank preview before evaluating the song"
+        );
         self.history.checkpoint(&self.last_evaluated);
         self.pending_play = play;
         self.work.send(Job::Prepare(
@@ -206,10 +265,112 @@ impl App {
         ))
     }
     fn stop(&mut self) -> Result<()> {
+        self.audition = false;
         if let Some(mut p) = self.playback.take() {
             p.stop()?;
         }
         Ok(())
+    }
+    fn voicebank_command(&mut self, args: &[String]) -> Result<()> {
+        let op = args.first().map(String::as_str).unwrap_or("help");
+        if op == "help" {
+            self.help.open = true;
+            self.help.topic = "voicebank-reference".into();
+            self.log("voicebank new PATH NAME [LANGUAGE|auto] | open PATH | target PHONE | guide [next|LYRICS] | register NAME | expression NAME | settings RATE BITS CHANNELS [flac|wav] | record [PHONE] | record-stop | import FILE [PHONE] | takes | take NUMBER | samples | sample NUMBER | replay [raw] | analyze | suggest | trim ONSET SUSTAIN END | set FIELD VALUE | use | coverage [LYRICS [NOTES [PRESET]]] | validate | missing | dictionary WORD PHONES | test LYRICS NOTES [PRESET] | presets | preset new|show|set|effect NAME ... | save | export NEW_DIRECTORY | import-bank SOURCE PATH | license TEXT | close");
+            return Ok(());
+        }
+        if op == "close" {
+            ensure!(
+                self.bank_capture.is_none() && self.bank_pending.is_none(),
+                "finish the bank take before closing the studio"
+            );
+            self.studio = None;
+            return Ok(());
+        }
+        if op == "record-stop" {
+            return self.command("record-stop");
+        }
+        if op == "record" {
+            ensure!(
+                self.recording.is_none()
+                    && self.finishing.is_none()
+                    && self.bank_pending.is_none()
+                    && !self.work.busy,
+                "finish the current operation/take first"
+            );
+            let view = self
+                .studio
+                .as_ref()
+                .context("open or create a voicebank first")?;
+            let target = args
+                .get(1)
+                .map(String::as_str)
+                .unwrap_or(&view.session.target)
+                .to_owned();
+            ensure!(
+                target
+                    .split('.')
+                    .all(|id| view.phones.iter().any(|p| p.id == id)
+                        || view.aliases.contains_key(id)),
+                "invalid recording target; voicebank guide"
+            );
+            let settings = &view.session.settings;
+            let capture = Capture {
+                phoneme: target.clone(),
+                register: view.session.register.clone(),
+                expression: view.session.expression.clone(),
+                recorded: true,
+                phonetics: Some(view.selection.clone()),
+            };
+            let manifest = crate::codec::safe_path(
+                &self.project.root,
+                &format!("{}/voicebank.toml", view.bank),
+            )?;
+            self.recording = Some(Recording::start(
+                manifest.parent().unwrap(),
+                &audio::RecordingConfig {
+                    name: "phoneme",
+                    format: &settings.format,
+                    rate: settings.rate,
+                    bits: settings.bits,
+                    channels: settings.channels,
+                    input_name: self.input.as_deref(),
+                    output_name: self.output.as_deref(),
+                    monitoring: self.monitor,
+                },
+            )?);
+            self.bank_capture = Some((view.bank.clone(), capture.clone()));
+            if let Err(e) = studio::recording_started(
+                &self.project.root,
+                &view.bank,
+                &self.recording.as_ref().unwrap().take,
+                &capture,
+            ) {
+                self.log(format!("Capture metadata: {e:#}. Recording is active; record-stop still preserves the audio."));
+            }
+            if let Some(view) = &mut self.studio {
+                view.session.target = target.to_owned();
+            }
+            self.log(
+                "Recording bank target. record-stop preserves this take and prepares its analysis.",
+            );
+            return Ok(());
+        }
+        ensure!(
+            self.bank_capture.is_none() && self.bank_pending.is_none(),
+            "finish the bank recording before editing or switching voicebanks"
+        );
+        if ["replay", "test"].contains(&op) {
+            ensure!(
+                self.playback.is_none(),
+                "stop playback before a voicebank preview"
+            );
+        }
+        self.work.send(Job::Studio(studio::Request {
+            project: self.project.clone(),
+            bank: self.studio.as_ref().map(|v| v.bank.clone()),
+            args: args.to_vec(),
+        }))
     }
     fn command(&mut self, src: &str) -> Result<()> {
         let rows = language::lex(src.trim_start_matches(':'))?;
@@ -221,10 +382,39 @@ impl App {
                 .ok_or_else(|| anyhow::anyhow!("missing argument; :help"))
         };
         match v[0].as_str() {
-            "help" => self.log(HELP),
+            "voicebank" => self.voicebank_command(&v[1..])?,
+            "help" => {
+                let topic = v.get(1).map(String::as_str).unwrap_or("music");
+                if topic == "search" {
+                    self.help.search = v.get(2).cloned().unwrap_or_default();
+                } else {
+                    ensure!(
+                        crate::help::document(topic).is_some(),
+                        "unknown help topic; help languages"
+                    );
+                    self.help.topic = topic.into();
+                }
+                self.help.open = true;
+                self.log(format!(
+                    "{}: {HELP}",
+                    self.catalog.text("Available commands")
+                ));
+            }
+            "language" => {
+                if v.get(1).is_none_or(|s| s == "help") {
+                    self.help.open = true;
+                    self.help.topic = "language".into();
+                } else {
+                    self.work
+                        .send(Job::Language(self.project.clone(), v[1..].to_vec()))?;
+                }
+            }
             "new" => {
                 ensure!(
-                    self.playback.is_none() && self.recording.is_none() && self.finishing.is_none(),
+                    self.playback.is_none()
+                        && self.recording.is_none()
+                        && self.finishing.is_none()
+                        && self.bank_pending.is_none(),
                     "stop audio and finish takes before creating a project"
                 );
                 self.work
@@ -262,7 +452,10 @@ impl App {
             "save" => self.work.send(Job::Save(self.project.clone()))?,
             "open" => {
                 ensure!(
-                    self.playback.is_none() && self.recording.is_none() && self.finishing.is_none(),
+                    self.playback.is_none()
+                        && self.recording.is_none()
+                        && self.finishing.is_none()
+                        && self.bank_pending.is_none(),
                     "stop audio and finish takes before opening a project"
                 );
                 self.work
@@ -270,7 +463,10 @@ impl App {
             }
             "save-as" => {
                 ensure!(
-                    self.playback.is_none() && self.recording.is_none() && self.finishing.is_none(),
+                    self.playback.is_none()
+                        && self.recording.is_none()
+                        && self.finishing.is_none()
+                        && self.bank_pending.is_none(),
                     "stop audio and finish takes before Save As"
                 );
                 self.work
@@ -404,19 +600,23 @@ impl App {
         Ok(())
     }
 }
-fn highlight(text: &str) -> egui::text::LayoutJob {
+fn highlight(text: &str, palette: Palette, size: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     for line in text.split_inclusive('\n') {
         let mut quoted = false;
+        let mut comment = false;
         for token in line.split_inclusive(|c: char| c.is_whitespace()) {
-            let color = if token.trim_start().starts_with('#') {
-                Color32::GRAY
+            if !quoted && token.trim_start().starts_with('#') {
+                comment = true;
+            }
+            let color = if comment {
+                palette.muted
             } else if quoted || token.contains('"') {
-                Color32::from_rgb(209, 184, 120)
+                palette.string
             } else if token.chars().next().is_some_and(|c| c.is_ascii_digit()) {
-                Color32::from_rgb(182, 155, 230)
+                palette.number
             } else {
-                Color32::from_rgb(112, 205, 181)
+                palette.keyword
             };
             if token.matches('"').count() % 2 == 1 {
                 quoted = !quoted;
@@ -425,7 +625,7 @@ fn highlight(text: &str) -> egui::text::LayoutJob {
                 token,
                 0.,
                 TextFormat {
-                    font_id: egui::FontId::monospace(14.),
+                    font_id: egui::FontId::monospace(size),
                     color,
                     ..Default::default()
                 },
@@ -436,12 +636,83 @@ fn highlight(text: &str) -> egui::text::LayoutJob {
 }
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
+        if let Some(result) = self.watcher.poll() {
+            match result {
+                Ok(config) => {
+                    self.config = config;
+                    self.theme_pending = true;
+                    self.log("Theme reloaded");
+                }
+                Err(e) => self.log(format!("CONFIG: {e:#}; keeping current theme")),
+            }
+        }
+        if self.theme_pending {
+            self.theme_pending = false;
+            match self.config.apply(ctx) {
+                Ok(()) => {
+                    match crate::locale::Catalog::load(
+                        &self.config.language.interface,
+                        crate::phonetics::resource_root().as_deref(),
+                    ) {
+                        Ok(catalog) => self.catalog = catalog,
+                        Err(e) => self.log(format!(
+                            "Language resources: {e:#}; keeping previous interface"
+                        )),
+                    }
+                    self.font_attempted = false;
+                    self.palette = self.config.palette().expect("validated theme");
+                    self.show_tracks = self.config.appearance.show_tracks;
+                    self.show_console = self.config.appearance.show_console;
+                }
+                Err(e) => self.log(format!("CONFIG: {e:#}")),
+            }
+        }
+
         if let Ok(reply) = self.work.rx.try_recv() {
             self.work.busy = false;
             match reply {
                 Err(e) => {
                     self.pending_play = false;
                     self.log(format!("ERROR: {e:#}"));
+                }
+                Ok(Reply::Language(messages)) => {
+                    self.font_attempted = false;
+                    for message in messages {
+                        self.log(message);
+                    }
+                    match self.watcher.load() {
+                        Ok(config) => {
+                            self.config = config;
+                            self.theme_pending = true;
+                        }
+                        Err(e) => self.log(format!("CONFIG: {e:#}")),
+                    }
+                }
+                Ok(Reply::Studio(output)) => {
+                    for line in &output.view.report {
+                        self.log(line.clone());
+                    }
+                    if let Some(take) = output
+                        .view
+                        .session
+                        .selected
+                        .and_then(|i| output.view.session.takes.get(i))
+                    {
+                        for warning in &take.analysis.warnings {
+                            self.log(format!("TAKE: {warning}"));
+                        }
+                    }
+                    self.studio = Some(output.view);
+                    self.show_tracks = true;
+                    if let Some(renderer) = output.preview {
+                        match Playback::start(renderer, self.output.as_deref()) {
+                            Ok(p) => {
+                                self.playback = Some(p);
+                                self.audition = true;
+                            }
+                            Err(e) => self.log(format!("Preview audio: {e:#}")),
+                        }
+                    }
                 }
                 Ok(Reply::Prepared(r, source)) => {
                     self.waveform = r
@@ -478,6 +749,7 @@ impl eframe::App for App {
                 }
                 Ok(Reply::Message(s)) => self.log(s),
                 Ok(Reply::Project(p)) => {
+                    self.studio = None;
                     self.project = p;
                     self.dirty = false;
                     self.last_evaluated = self.project.source.clone();
@@ -511,15 +783,39 @@ impl eframe::App for App {
                 .map_err(|_| anyhow::anyhow!("recording worker panicked"))
                 .and_then(|r| r);
             match result {
-                Ok(path) => self.log(format!(
-                    "Take saved: {}. Add import \"{}\" to a track.",
-                    path.display(),
-                    path.strip_prefix(&self.project.root)
-                        .unwrap_or(&path)
-                        .display()
-                )),
-                Err(e) => self.log(format!("ERROR: {e:#}")),
+                Ok(path) => {
+                    if let Some((bank, capture)) = self.bank_capture.take() {
+                        self.bank_pending = Some((bank, path, capture));
+                        self.log("Take finalized; waiting for bank analysis worker");
+                    } else {
+                        self.log(format!(
+                            "Take saved: {}. Add import \"{}\" to a track.",
+                            path.display(),
+                            crate::codec::script_path(
+                                path.strip_prefix(&self.project.root).unwrap_or(&path)
+                            )
+                        ));
+                    }
+                }
+                Err(e) => {
+                    self.bank_capture = None;
+                    self.log(format!("ERROR: {e:#}"));
+                }
             }
+        }
+        if !self.work.busy
+            && let Some((bank, path, capture)) = self.bank_pending.take()
+            && let Err(e) = self.work.send(Job::Capture(
+                self.project.clone(),
+                bank,
+                path.clone(),
+                capture,
+            ))
+        {
+            self.log(format!(
+                "Bank import failed: {e:#}; recording preserved at {}",
+                path.display()
+            ));
         }
         if self.preview_source != self.project.source {
             self.preview = language::parse(&self.project.source).ok();
@@ -590,13 +886,13 @@ impl eframe::App for App {
         }
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
             ui.horizontal(|ui| {
-                ui.colored_label(Color32::from_rgb(125, 226, 186), "SONGBIRD");
+                ui.colored_label(self.palette.accent, "SONGBIRD");
                 ui.label(format!(
                     "{}{}",
                     self.project.root.display(),
                     if self.dirty { " *" } else { "" }
                 ));
-                if ui.button("Evaluate").clicked() {
+                if ui.button(self.catalog.text("Evaluate")).clicked() {
                     let _ = self.command("eval").map_err(|e| self.log(e.to_string()));
                 }
                 if ui
@@ -614,11 +910,14 @@ impl eframe::App for App {
                     };
                     let _ = self.command(c).map_err(|e| self.log(e.to_string()));
                 }
+                if ui.button(self.catalog.text("Help")).clicked() {
+                    self.help.open = true;
+                }
                 if self.work.busy {
                     ui.spinner();
                 }
                 if self.recording.is_some() {
-                    ui.colored_label(Color32::LIGHT_RED, "● REC");
+                    ui.colored_label(self.palette.recording, self.catalog.text("● REC"));
                 }
             });
             ui.horizontal(|ui| {
@@ -656,58 +955,156 @@ impl eframe::App for App {
                 .resizable(true)
                 .default_width(220.)
                 .show(ctx, |ui| {
-                    ui.heading("Tracks");
-                    if let Some(s) = &self.preview {
-                        for t in &s.tracks {
-                            ui.monospace(format!(
-                                "{} {}",
-                                if t.mute {
-                                    "×"
-                                } else if t.solo {
-                                    "★"
-                                } else {
-                                    "›"
-                                },
-                                t.name
-                            ));
+                    egui::ScrollArea::vertical().show(ui, |ui| {
+                        if let Some(view) = &self.studio {
+                            ui.heading(self.catalog.text("Voicebank Studio"));
+                            ui.label(&view.name);
+                            ui.monospace(&view.bank);
+                            ui.colored_label(
+                                self.palette.accent,
+                                format!("{} {}", self.catalog.text("Target:"), view.session.target),
+                            );
+                            for phone in view.session.target.split('.') {
+                                if let Some(p) = view.phones.iter().find(|p| p.id == phone) {
+                                    ui.small(format!(
+                                        "{} — {} ({})",
+                                        p.id, p.description, p.prompt
+                                    ));
+                                }
+                            }
                             ui.small(format!(
-                                "{} · {} clips",
-                                t.voice.as_deref().unwrap_or(&t.instrument),
-                                t.clips.len()
+                                "{} / {} · {} Hz · {} bit · {} ch · {}",
+                                view.session.register,
+                                view.session.expression,
+                                view.session.settings.rate,
+                                view.session.settings.bits,
+                                view.session.settings.channels,
+                                view.session.settings.format
                             ));
+                            ui.label(format!(
+                                "{} published samples · {} takes",
+                                view.samples,
+                                view.session.takes.len()
+                            ));
+                            if let Some((i, take)) = view
+                                .session
+                                .selected
+                                .and_then(|i| view.session.takes.get(i).map(|t| (i, t)))
+                            {
+                                ui.monospace(format!("Take {}: {}", i + 1, take.capture.phoneme));
+                                ui.small(format!(
+                                    "Root: {} · {}",
+                                    take.root
+                                        .map(|r| format!("{r:.1} Hz"))
+                                        .unwrap_or("unknown".into()),
+                                    match take.voiced {
+                                        Some(true) => "voiced",
+                                        Some(false) => "unvoiced",
+                                        None => "voicing uncertain",
+                                    }
+                                ));
+                                ui.small(format!(
+                                    "onset {:.3} / sustain {:.3} / end {:.3}",
+                                    take.onset, take.sustain, take.end
+                                ));
+                                ui.small(format!(
+                                    "peak {:.3} · RMS {:.1} dB · clipped {}",
+                                    take.analysis.peak,
+                                    take.analysis.rms_db,
+                                    take.analysis.clipped_frames
+                                ));
+                                for warning in &take.analysis.warnings {
+                                    ui.colored_label(self.palette.recording, warning);
+                                }
+                            }
+                            ui.small("voicebank help · voicebank guide next");
                             ui.separator();
                         }
-                    }
-                    ui.label("Asset waveform peaks");
-                    let (rect, _) = ui.allocate_exact_size(
-                        egui::vec2(ui.available_width(), 100.),
-                        egui::Sense::hover(),
-                    );
-                    if !self.waveform.is_empty() {
-                        let p = ui.painter();
-                        let bins = (rect.width() as usize).max(1);
-                        for i in 0..bins {
-                            let start = i * self.waveform.len() / bins;
-                            let end = ((i + 1) * self.waveform.len() / bins)
-                                .max(start + 1)
-                                .min(self.waveform.len());
-                            let y = self.waveform[start..end]
-                                .iter()
-                                .copied()
-                                .fold(0f32, f32::max)
-                                .min(1.)
-                                * rect.height()
-                                * 0.45;
-                            let x = rect.left() + i as f32;
-                            p.line_segment(
-                                [
-                                    egui::pos2(x, rect.center().y - y),
-                                    egui::pos2(x, rect.center().y + y),
-                                ],
-                                egui::Stroke::new(1.0_f32, Color32::from_rgb(95, 185, 160)),
-                            );
+                        ui.heading(self.catalog.text("Tracks"));
+                        if let Some(s) = &self.preview {
+                            for t in &s.tracks {
+                                ui.monospace(format!(
+                                    "{} {}",
+                                    if t.mute {
+                                        "×"
+                                    } else if t.solo {
+                                        "★"
+                                    } else {
+                                        "›"
+                                    },
+                                    t.name
+                                ));
+                                ui.small(format!(
+                                    "{} · {} clips",
+                                    t.vocal_preset
+                                        .as_deref()
+                                        .or(t.voice.as_deref())
+                                        .unwrap_or(&t.instrument),
+                                    t.clips.len()
+                                ));
+                                ui.separator();
+                            }
                         }
-                    }
+                        let waveform = self
+                            .studio
+                            .as_ref()
+                            .map_or(self.waveform.as_slice(), |v| v.waveform.as_slice());
+                        ui.label(self.catalog.text(if self.studio.is_some() {
+                            "Selected take waveform"
+                        } else {
+                            "Asset waveform peaks"
+                        }));
+                        let (rect, _) = ui.allocate_exact_size(
+                            egui::vec2(ui.available_width(), 100.),
+                            egui::Sense::hover(),
+                        );
+                        if !waveform.is_empty() {
+                            let p = ui.painter();
+                            let bins = (rect.width() as usize).max(1);
+                            for i in 0..bins {
+                                let start = i * waveform.len() / bins;
+                                let end = ((i + 1) * waveform.len() / bins)
+                                    .max(start + 1)
+                                    .min(waveform.len());
+                                let y = waveform[start..end]
+                                    .iter()
+                                    .copied()
+                                    .fold(0f32, f32::max)
+                                    .min(1.)
+                                    * rect.height()
+                                    * 0.45;
+                                let x = rect.left() + i as f32;
+                                p.line_segment(
+                                    [
+                                        egui::pos2(x, rect.center().y - y),
+                                        egui::pos2(x, rect.center().y + y),
+                                    ],
+                                    egui::Stroke::new(1.0_f32, self.palette.waveform),
+                                );
+                            }
+                        }
+                        if let Some(view) = &self.studio
+                            && view.duration > 0.
+                            && let Some(take) = view
+                                .session
+                                .selected
+                                .and_then(|i| view.session.takes.get(i))
+                        {
+                            for (time, color) in [
+                                (take.onset, self.palette.accent),
+                                (take.sustain, self.palette.number),
+                                (take.release.unwrap_or(take.end), self.palette.string),
+                                (take.end, self.palette.recording),
+                            ] {
+                                let x = rect.left()
+                                    + rect.width() * (time / view.duration).clamp(0., 1.) as f32;
+                                ui.painter().line_segment(
+                                    [egui::pos2(x, rect.top()), egui::pos2(x, rect.bottom())],
+                                    egui::Stroke::new(1.0_f32, color),
+                                );
+                            }
+                        }
+                    });
                 });
         }
         egui::TopBottomPanel::bottom("command").show(ctx, |ui| {
@@ -742,6 +1139,8 @@ impl eframe::App for App {
                             "import",
                             "open",
                             "voice-new",
+                            "voicebank",
+                            "language",
                             "voice-check",
                             "undo",
                             "redo",
@@ -805,7 +1204,7 @@ impl eframe::App for App {
         egui::CentralPanel::default().show(ctx, |ui| {
             if self.search_open {
                 ui.horizontal(|ui| {
-                    ui.label("Find:");
+                    ui.label(self.catalog.text("Find:"));
                     if ui
                         .add(
                             egui::TextEdit::singleline(&mut self.search)
@@ -815,10 +1214,10 @@ impl eframe::App for App {
                     {
                         self.search_from = 0;
                     }
-                    if ui.button("Next / F3").clicked() {
+                    if ui.button(self.catalog.text("Next / F3")).clicked() {
                         self.pending_find = true;
                     }
-                    if ui.button("Close").clicked() {
+                    if ui.button(self.catalog.text("Close")).clicked() {
                         self.search_open = false;
                     }
                     let n = if self.search.is_empty() {
@@ -859,7 +1258,13 @@ impl eframe::App for App {
             }
             egui::ScrollArea::both().show(ui, |ui| {
                 let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _: f32| {
-                    ui.fonts_mut(|f| f.layout_job(highlight(text.as_str())))
+                    ui.fonts_mut(|f| {
+                        f.layout_job(highlight(
+                            text.as_str(),
+                            self.palette,
+                            self.config.appearance.editor_font_size,
+                        ))
+                    })
                 };
                 let response = ui.add(
                     egui::TextEdit::multiline(&mut self.project.source)
@@ -889,6 +1294,21 @@ impl eframe::App for App {
                 ctx.request_repaint();
             }
         }
+        let needs_font = self.catalog.language.starts_with("ja")
+            || self
+                .project
+                .source
+                .chars()
+                .any(|c| ('\u{2e80}'..='\u{9fff}').contains(&c))
+            || self
+                .studio
+                .as_ref()
+                .is_some_and(|s| s.language.starts_with("ja"));
+        if !self.font_attempted && (needs_font || self.config.language.font_file.is_some()) {
+            self.font_attempted = true;
+            match crate::locale::font(ctx,&self.config,needs_font){Ok(true)=>{},Ok(false)=>self.log("CJK text needs an installed CJK font; set language.font_file or install Noto Sans CJK, then language reload"),Err(e)=>self.log(format!("Language font: {e:#}"))}
+        }
+        self.help.show(ctx, &self.catalog);
         ctx.request_repaint_after(
             if self.playback.is_some() || self.recording.is_some() || self.work.busy {
                 Duration::from_millis(33)
@@ -899,16 +1319,20 @@ impl eframe::App for App {
     }
 }
 pub fn run(project: Project) -> Result<()> {
+    let app = App::new(project);
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([1120., 780.]),
+        viewport: egui::ViewportBuilder::default().with_inner_size([
+            app.config.appearance.window_width,
+            app.config.appearance.window_height,
+        ]),
         ..Default::default()
     };
     eframe::run_native(
         "Songbird",
         options,
         Box::new(move |cc| {
-            cc.egui_ctx.set_visuals(egui::Visuals::dark());
-            Ok(Box::new(App::new(project)))
+            app.config.apply(&cc.egui_ctx)?;
+            Ok(Box::new(app))
         }),
     )
     .map_err(|e| anyhow::anyhow!("GUI: {e}"))
@@ -924,13 +1348,17 @@ impl Drop for App {
         }
     }
 }
-pub fn smoke(project: Project) -> Result<()> {
+pub fn smoke(project: Project, bank: Option<String>) -> Result<()> {
+    let view = bank
+        .map(|b| studio::Studio::open(&project.root, &b)?.view(vec![]))
+        .transpose()?;
     let options = eframe::NativeOptions::default();
     eframe::run_native(
         "Songbird GUI smoke",
         options,
         Box::new(move |_| {
             let mut app = App::new(project);
+            app.studio = view;
             app.smoke_frames = Some(0);
             Ok(Box::new(app))
         }),

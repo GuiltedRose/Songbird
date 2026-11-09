@@ -18,6 +18,7 @@ pub struct PreparedTrack {
     pub clips: Vec<PreparedClip>,
     pub bank: Option<LoadedBank>,
     pub units: Vec<VocalUnit>,
+    unit_ends: Vec<f64>,
     pub effects: Vec<Processor>,
     pub drums: BTreeMap<String, Asset>,
     phases: Vec<Vec<f64>>,
@@ -32,7 +33,38 @@ pub struct Renderer {
     pub clipped: u64,
 }
 impl Renderer {
-    pub fn prepare(root: &Path, score: Score) -> Result<Self> {
+    pub fn prepare(root: &Path, mut score: Score) -> Result<Self> {
+        crate::studio::apply_presets(root, &mut score)?;
+        let used = score
+            .tracks
+            .iter()
+            .filter_map(|t| t.voice.clone())
+            .collect::<std::collections::BTreeSet<_>>();
+        ensure!(
+            score.tracks.iter().filter(|t| t.voice.is_some()).count() <= 16,
+            "singer track limit 16"
+        );
+        let defaults = crate::phonetics::default_selection(root, None)?;
+        for (id, voice) in &mut score.voices {
+            if !used.contains(id) {
+                continue;
+            }
+            if voice.bank == "default" || voice.bank.starts_with("default:") {
+                let selected = crate::phonetics::Selection {
+                    language: voice
+                        .bank
+                        .strip_prefix("default:")
+                        .map(str::to_owned)
+                        .or(voice.language.clone())
+                        .or(score.language.clone())
+                        .or(defaults.language.clone()),
+                    inventory: voice.inventory.clone().or(defaults.inventory.clone()),
+                    provider: voice.provider.clone().or(defaults.provider.clone()),
+                };
+                voice.bank = crate::procedural::default_bank(root, &selected)?;
+            }
+        }
+
         let effect_count = score.master.len()
             + score
                 .tracks
@@ -108,11 +140,23 @@ impl Renderer {
             let (bank, units) = if let Some(name) = &spec.voice {
                 let voice = &score.voices[name];
                 let mut track = spec.clone();
-                if track.expression == "normal" && !voice.style.is_empty() {
+                if track.expression == "normal"
+                    && !voice.style.is_empty()
+                    && !track.vocal_overrides.contains("expression")
+                {
                     track.expression = voice.style.clone();
                 }
-                let bank = LoadedBank::load(root, voice, &cache)?;
-                let units = voice::align(&bank, voice, &track, &events, score.tempo)?;
+                let mut bank = LoadedBank::load(root, voice, &cache)?;
+                let context = crate::phonetics::for_track(root, &bank.meta, voice, &track, &score)?;
+                ensure!(
+                    context.inventory.inventory == bank.profile.inventory.inventory,
+                    "incompatible phoneme inventories: track {} and bank {}",
+                    context.inventory.inventory,
+                    bank.profile.inventory.inventory
+                );
+                bank.profile = context;
+                let mut units = voice::align(&bank, voice, &track, &events, score.tempo)?;
+                units.sort_by(|a, b| a.start.total_cmp(&b.start));
                 (Some(bank), units)
             } else {
                 (None, vec![])
@@ -127,8 +171,17 @@ impl Renderer {
             total_effects += spec.effects.len();
             ensure!(total_effects <= 256, "project effect limit 256");
             let phases = events.iter().map(|e| vec![0.; e.notes.len()]).collect();
+            let mut furthest = 0f64;
+            let unit_ends = units
+                .iter()
+                .map(|u| {
+                    furthest = furthest.max(u.end);
+                    furthest
+                })
+                .collect();
             tracks.push(PreparedTrack {
                 phases,
+                unit_ends,
                 spec: spec.clone(),
                 events,
                 cycle,
@@ -192,7 +245,9 @@ impl Renderer {
                 if local >= 0. {
                     if let Some(bank) = &mut t.bank {
                         let voice_time = beat * 60. / bpm;
-                        for unit in &mut t.units {
+                        let end = t.units.partition_point(|u| u.start <= voice_time);
+                        let start = t.unit_ends[..end].partition_point(|last| *last < voice_time);
+                        for unit in &mut t.units[start..end] {
                             if voice_time >= unit.start && voice_time < unit.end {
                                 let v = voice::sample(bank, unit, voice_time, &t.spec, bend, rate)?;
                                 x[0] += v[0];

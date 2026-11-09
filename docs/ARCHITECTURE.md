@@ -8,6 +8,9 @@ require GUI state. `main` also exposes offline CLI operations.
 - `codec`: streaming WAV/FLAC decode to temporary file-backed PCM, paged reads,
   windowed-sinc resampling, streaming encoders, unique files, path checks, recovery.
 - `dsp`: deterministic synthesis, ADSR, pitch/volume controls, filters and effects.
+- `studio`: guided bank creation, immutable takes/capture receipts, editable metadata,
+  coverage, portable performance presets, and preview preparation.
+- `voice_analysis`: bounded local silence/level/YIN pitch and stable-region suggestions.
 - `voice`: portable bank validation, embedded English dictionary lookup, syllable
   alignment, recorded-phone playback and pitch-synchronous vowel overlap/add.
 - `engine`: one sample-indexed multitrack renderer, shared by playback and export.
@@ -90,3 +93,12 @@ vocal PSOLA require listening validation; neither is a claim of mastering-grade
 processing. The denoiser is amplitude attenuation, not spectral-profile removal.
 Lyrics use dictionary lookup and heuristic syllabification, not a trained language
 model. No human training data or model-qualification machinery is introduced.
+
+Voicebank Studio adds no dependencies or service processes. Preparation/analysis
+and file mutations use the existing GUI worker; a small capture-start receipt is
+written on the control thread after stream creation. Audio callbacks remain free
+of analysis, encoding and file operations. Studio limits take duration to 30 s
+and decoded input to 5,760,000 interleaved samples. Pitch uses at most 64 windows;
+suggestions are optional metadata, not phoneme recognition. Preset harmony expands
+within existing track/singer/effect limits. Vocal units are indexed by start time
+and cumulative end time so inactive phonemes are not scanned on every sample.

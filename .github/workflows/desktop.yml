@@ -1,0 +1,87 @@
+name: Desktop builds
+on:
+  push:
+  pull_request:
+  workflow_dispatch:
+permissions:
+  contents: read
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+jobs:
+  desktop:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            exe: songbird.exe
+          - os: macos-latest
+            exe: songbird
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    env:
+      RUSTUP_TOOLCHAIN: 1.97.1
+      CARGO_TERM_COLOR: always
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          persist-credentials: false
+      - name: Install tested Rust toolchain
+        run: rustup toolchain install 1.97.1 --profile minimal --component rustfmt,clippy
+      - name: Fetch locked dependencies
+        run: cargo fetch --locked
+      - name: Formatting
+        run: cargo fmt --check
+      - name: Lint
+        run: cargo clippy --locked --offline --all-targets -- -D warnings
+      - name: Test audio, projects, recovery, and configuration
+        run: cargo test --locked --offline
+      - name: Build native release
+        run: cargo build --release --locked --offline
+      - name: CLI smoke test
+        run: ./target/release/${{ matrix.exe }} help
+      - name: Assemble Windows package
+        if: runner.os == 'Windows'
+        shell: pwsh
+        run: |
+          $bundle = Join-Path $env:RUNNER_TEMP 'songbird-windows-x64'
+          New-Item -ItemType Directory -Path $bundle | Out-Null
+          Copy-Item target/release/songbird.exe, config.example.toml, README.md, LICENSE $bundle
+          Copy-Item docs, resources -Destination $bundle -Recurse
+          New-Item -ItemType Directory -Path (Join-Path $bundle 'examples'), (Join-Path $bundle 'data') | Out-Null
+          Copy-Item examples/acceptance, examples/songwriting, examples/voicebank-studio (Join-Path $bundle 'examples') -Recurse
+          Copy-Item data/CMUDICT-LICENSE, data/README.md, data/cmudict.dict (Join-Path $bundle 'data')
+          Copy-Item packaging/Start-Songbird.cmd $bundle
+      - name: Upload Windows package
+        if: runner.os == 'Windows'
+        uses: actions/upload-artifact@v7
+        with:
+          name: songbird-windows-${{ runner.arch }}
+          path: ${{ runner.temp }}/songbird-windows-x64
+          if-no-files-found: error
+          retention-days: 14
+      - name: Assemble macOS app
+        if: runner.os == 'macOS'
+        shell: bash
+        run: |
+          set -euo pipefail
+          bundle="$RUNNER_TEMP/songbird-macos"
+          mkdir -p "$bundle/Songbird.app/Contents/MacOS" "$bundle/examples" "$bundle/data"
+          cp target/release/songbird "$bundle/Songbird.app/Contents/MacOS/songbird"
+          chmod +x "$bundle/Songbird.app/Contents/MacOS/songbird"
+          cp packaging/macos/Info.plist "$bundle/Songbird.app/Contents/Info.plist"
+          cp README.md LICENSE config.example.toml "$bundle/"
+          cp -R docs resources "$bundle/"
+          cp -R examples/acceptance examples/songwriting examples/voicebank-studio "$bundle/examples/"
+          cp data/CMUDICT-LICENSE data/README.md data/cmudict.dict "$bundle/data/"
+          plutil -lint "$bundle/Songbird.app/Contents/Info.plist"
+          tar -czf "$RUNNER_TEMP/songbird-macos.tar.gz" -C "$bundle" .
+      - name: Upload macOS package
+        if: runner.os == 'macOS'
+        uses: actions/upload-artifact@v7
+        with:
+          name: songbird-macos-${{ runner.arch }}
+          path: ${{ runner.temp }}/songbird-macos.tar.gz
+          if-no-files-found: error
+          retention-days: 14

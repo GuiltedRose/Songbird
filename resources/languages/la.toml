@@ -1,0 +1,346 @@
+version = 1
+language = "la"
+name = "Latin (voicebanks only)"
+inventory = "la-classical"
+provider = "dictionary"
+provider_version = "1"
+license = "BSD-3-Clause; original Songbird starter resource"
+attribution = "Songbird contributors; starter mappings, not a comprehensive pronunciation lexicon"
+capabilities = ["manual", "dictionary", "literal-rules"]
+scripts = ["Unicode"]
+syllabification = "explicit"
+
+[timing]
+consonant_fraction = 0.35
+consonant_max = 0.075
+crossfade_ms = 4.0
+allow_consonant_syllables = false
+
+[dictionary]
+"salve" = "s a l / w eː"
+"mundi" = "m u n / d iː"
+"gloria" = "g l oː / r i / a"
+"ave" = "a / w eː"
+
+[[phones]]
+id = "a"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme a; record your chosen pronunciation"
+prompt = "Hold a steadily"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "e"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme e; record your chosen pronunciation"
+prompt = "Hold e steadily"
+formants = [400, 2000, 2600]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "i"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme i; record your chosen pronunciation"
+prompt = "Hold i steadily"
+formants = [270, 2290, 3010]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "o"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme o; record your chosen pronunciation"
+prompt = "Hold o steadily"
+formants = [450, 800, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "u"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme u; record your chosen pronunciation"
+prompt = "Hold u steadily"
+formants = [300, 870, 2240]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "aː"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme aː; record your chosen pronunciation"
+prompt = "Hold aː steadily"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "eː"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme eː; record your chosen pronunciation"
+prompt = "Hold eː steadily"
+formants = [400, 2000, 2600]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "iː"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme iː; record your chosen pronunciation"
+prompt = "Hold iː steadily"
+formants = [270, 2290, 3010]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "oː"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme oː; record your chosen pronunciation"
+prompt = "Hold oː steadily"
+formants = [450, 800, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "uː"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme uː; record your chosen pronunciation"
+prompt = "Hold uː steadily"
+formants = [300, 870, 2240]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "p"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme p; record your chosen pronunciation"
+prompt = "Record a clear p onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "b"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme b; record your chosen pronunciation"
+prompt = "Record a clear b onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "t"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme t; record your chosen pronunciation"
+prompt = "Record a clear t onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "d"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme d; record your chosen pronunciation"
+prompt = "Record a clear d onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "k"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme k; record your chosen pronunciation"
+prompt = "Record a clear k onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "g"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "Latin (voicebanks only) phoneme g; record your chosen pronunciation"
+prompt = "Record a clear g onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "f"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme f; record your chosen pronunciation"
+prompt = "Record a clear f onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "s"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme s; record your chosen pronunciation"
+prompt = "Record a clear s onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 4500.0
+
+[[phones]]
+id = "h"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme h; record your chosen pronunciation"
+prompt = "Record a clear h onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "m"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme m; record your chosen pronunciation"
+prompt = "Record a clear m onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "n"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme n; record your chosen pronunciation"
+prompt = "Record a clear n onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ŋ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme ŋ; record your chosen pronunciation"
+prompt = "Record a clear ŋ onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "l"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme l; record your chosen pronunciation"
+prompt = "Record a clear l onset or syllabic sound"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "r"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme r; record your chosen pronunciation"
+prompt = "Record a clear r onset or syllabic sound"
+manner = "trill"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "w"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme w; record your chosen pronunciation"
+prompt = "Record a clear w onset or syllabic sound"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "j"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "Latin (voicebanks only) phoneme j; record your chosen pronunciation"
+prompt = "Record a clear j onset or syllabic sound"
+manner = "affricate"
+nasal = false
+noise_cutoff = 1800.0
+

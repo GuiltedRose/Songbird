@@ -11,6 +11,18 @@ use std::{
     path::{Path, PathBuf},
     sync::atomic::{AtomicU64, Ordering},
 };
+/// Paths inserted into quoted composition text use portable forward slashes.
+pub fn script_path(path: &Path) -> String {
+    let value = path.to_string_lossy().into_owned();
+    #[cfg(windows)]
+    {
+        value.replace('\\', "/")
+    }
+    #[cfg(not(windows))]
+    {
+        value
+    }
+}
 static SERIAL: AtomicU64 = AtomicU64::new(0);
 pub fn unique(dir: &Path, stem: &str, extension: &str) -> Result<PathBuf> {
     ensure!(
@@ -85,6 +97,9 @@ pub struct Asset {
 }
 impl Asset {
     pub fn decode(path: &Path, cache: &Path) -> Result<Self> {
+        Self::decode_bounded(path, cache, 691_200_000)
+    }
+    pub(crate) fn decode_bounded(path: &Path, cache: &Path, max_samples: u64) -> Result<Self> {
         let target = unique(cache, "pcm", "raw")?;
         let mut writer = BufWriter::new(
             OpenOptions::new()
@@ -98,7 +113,10 @@ impl Asset {
         let mut chunk_peak = 0f32;
         let mut push = |x: f32| -> Result<()> {
             ensure!(x.is_finite(), "nonfinite audio sample");
-            ensure!(count < 96000 * 2 * 3600, "asset exceeds one hour at 96 kHz");
+            ensure!(
+                count < max_samples,
+                "decoded asset exceeds resource limit of {max_samples} interleaved samples"
+            );
             peak = peak.max(x.abs());
             chunk_peak = chunk_peak.max(x.abs());
             if count % 2048 == 2047 {

@@ -17,13 +17,17 @@ pub struct Project {
     pub root: PathBuf,
     pub source: String,
 }
-fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
+pub(crate) fn atomic(path: &Path, bytes: &[u8]) -> Result<()> {
     let parent = path.parent().unwrap();
     let tmp = codec::unique(parent, "save", "tmp")?;
     let mut f = OpenOptions::new().create_new(true).write(true).open(&tmp)?;
     f.write_all(bytes)?;
     f.sync_all()?;
+    drop(f);
     fs::rename(&tmp, path)?;
+    // Windows does not permit opening directories using File::open for fsync.
+    // The staged file is synced above; preserve directory fsync on Unix.
+    #[cfg(unix)]
     File::open(parent)?.sync_all()?;
     Ok(())
 }
@@ -125,7 +129,8 @@ impl Project {
                 .starts_with(self.root.canonicalize()?),
             "Save As must be outside the original project"
         );
-        let score = language::parse(&self.source)?;
+        let mut score = language::parse(&self.source)?;
+        crate::studio::apply_presets(&self.root, &mut score)?;
         fs::create_dir_all(target)?;
         let copy = |name: &str| -> Result<()> {
             let src = codec::safe_path(&self.root, name)?;
@@ -139,6 +144,9 @@ impl Project {
             Ok(())
         };
         for t in &score.tracks {
+            if let Some(preset) = &t.vocal_preset {
+                copy(preset)?;
+            }
             for c in &t.clips {
                 copy(&c.path)?;
             }
@@ -156,13 +164,22 @@ impl Project {
             }
         }
         // Include alternate and unused takes, not only assets referenced by the score.
+        if self.root.join("language.toml").is_file() {
+            copy("language.toml")?;
+        }
         let mut stack = vec![
+            "languages".to_owned(),
             "recordings".to_owned(),
             "samples".to_owned(),
             "voices".to_owned(),
         ];
+        stack.extend(score.voices.values().map(|v| v.bank.clone()));
+        let mut visited = std::collections::BTreeSet::new();
         let mut count = 0;
         while let Some(relative) = stack.pop() {
+            if !visited.insert(relative.clone()) {
+                continue;
+            }
             let path = self.root.join(&relative);
             if !path.exists() {
                 continue;
@@ -209,10 +226,7 @@ impl Project {
             .open(&target)?;
         std::io::copy(&mut File::open(path)?, &mut dest)?;
         dest.sync_all()?;
-        Ok(target
-            .strip_prefix(&self.root)?
-            .to_string_lossy()
-            .into_owned())
+        Ok(codec::script_path(target.strip_prefix(&self.root)?))
     }
 }
 #[derive(Default)]

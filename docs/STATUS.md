@@ -8,7 +8,7 @@ also need consideration before relying on it for production work.
 
 ## Executed successfully
 
-- `cargo test --offline --locked`: **33 tests passed**, no ignored/failed tests.
+- `cargo test --offline --locked`: **66 tests passed**, no ignored/failed tests.
 - `cargo clippy --offline --locked --all-targets -- -D warnings`: passed.
 - `cargo build --release --offline --locked`: passed.
 - `cargo fmt --check`: passed.
@@ -39,6 +39,9 @@ A committed audio regression reproduces the issue and verifies PCM identity.
 Final STREAMINFO includes actual frame-size bounds, sample count, and PCM MD5.
 
 ## Measured release results
+
+The table below is the earlier pre-Studio baseline; its binary size, RSS and render
+times are not measurements of the new Studio feature.
 
 Rust 1.97.1, ALSA development library 1.2.16.1; Linux execution environment on
 Intel Core i7-8750H @ 2.20 GHz. Single observations, not a controlled benchmark.
@@ -72,7 +75,7 @@ it does not predict performance for large human banks or long projects.
 | Capture synchronization | Imported/arranged audio shares a sample-indexed transport. New takes need explicit placement; automatic input-latency compensation and shared-clock capture alignment are not implemented. |
 | Monitoring | Uses a second output stream, requires host concurrent-stream support; uncalibrated latency. No monitored-output gain control. |
 | Human English singing | Dictionary, bank selection, syllable alignment, consonant playback, vowel PSOLA, vibrato, bends, smoothing and dynamics are implemented. No authorized human bank was supplied. Intelligibility, pitch accuracy, formant quality and useful register range remain unverified. |
-| Vocal character creation | Portable TOML banks and sample labels are supported. Root pitch, timing, phoneme/style/register labels and dictionary edits are manual. There is no automated bank analysis or specialized bank-labeling GUI. |
+| Vocal character creation | Integrated Studio commands/panel support guided recording, take import/selection, waveform/timing edits, local pitch/onset/voicing suggestions, publication, coverage checks, dictionaries, presets, preview, and portable reuse. Suggestions need manual inspection; phoneme identity comes from the chosen target. |
 | Synthesis quality | Analytic vowels and mixed audio are audible and deterministic. Root-grid PSOLA is basic, not evidence of natural English coarticulation or mastering-grade output. |
 | Editing | Text operations are functional; waveform display assists inspection. Group labels are metadata, not bulk-edit selectors; there are no mouse waveform handles, automatic relinking, or spectral/noise-profile editor. |
 | Stretch/effects | Granular stretching/pitch shift and simple native effects are implemented. Extreme shifts and transients can produce artifacts. Denoise is amplitude suppression rather than profile-based spectral subtraction. |
@@ -82,12 +85,68 @@ it does not predict performance for large human banks or long projects.
 | Recovery | Atomic generations, prior manifests, drafts, take preservation, and PCM WAV repair are implemented/tested. An export can delay periodic drafts; original media still needs operator backups. |
 | GUI workflow | Native window creation/rendering passed. Keyboard completion/history/search, recording controls and a full creative session need manual interaction acceptance. |
 
-The included voicebank covers only an analytic AA vowel. It cannot synthesize
-arbitrary English lyrics. It is openly labeled as a test/example instrument;
-no synthesized signal is presented as a human microphone recording. A complete
-15-item acceptance arrangement requires real human recordings and a suitably
-covered bank, followed by save/reopen and dual-format export comparisons.
+The original analytic bank covers only AA; the new Studio example contains
+explicitly generated M/IY/S material and a harmony preset. Neither is a complete
+human English voicebank or proof of intelligible natural singing. No synthesized
+signal is presented as microphone capture. Full singing acceptance still requires
+authorized human recordings, listening checks and compatible physical audio devices.
+No such recordings were supplied for this feature.
 
 Follow [OPERATIONS.md](OPERATIONS.md) for exact prerequisites, validation,
 hardware acceptance, optional installation/activation, recovery, and rollback.
 Full production acceptance remains outstanding.
+
+## Native platform follow-up
+
+Windows/macOS config discovery, portable composition paths, Windows save handling,
+a Windows launcher and macOS microphone/app metadata have been added. The desktop
+GitHub Actions matrix is prepared for native builds/tests/artifacts on both hosts.
+It has not been pushed or dispatched here. Linux checks do not establish Windows
+or macOS compatibility; native CI results, GUI interaction, microphone permission,
+recording/playback, and device-loss checks are pending. Appearance tests now also
+cover Windows/macOS config resolution and live theme reload.
+
+Unix saves retain parent-directory fsync. Windows saves sync and close the staged
+file before rename; directory fsync is unavailable through this implementation.
+Windows power-loss durability therefore needs separate validation.
+
+## Voicebank Studio verification
+
+The added automated cases exercise creation/settings, actual PCM import and source
+preservation, capture-context receipts (without hardware verification), pitch and
+silence/onset analysis, clipping/quiet/unvoiced diagnostics, manual corrections,
+coverage/profile/range failures, English pronunciations/ambiguities, syllable
+samples/melismas, metadata updates, legacy bank editing, portable presets/harmonies,
+save/export/reimport, corrupted/missing assets, extreme numeric input rejection,
+and deterministic multi-phoneme previews through the shared mixer. The generated
+example also mixes its preset-driven voice with drums/bass.
+
+Analysis suggestions do not recognize a recorded phoneme or validate a voice's
+identity/intelligibility. A capture-start receipt does not certify completion;
+take registration follows successful recorder finalization. Source files and
+previous metadata remain when the preferred take changes. Bank/studio manifests
+are independently atomic; simultaneous crash recovery is not a multi-file transaction.
+
+The feature's real-microphone and intelligible-human-phrase acceptance steps remain
+operator checks. Existing Windows/macOS CI jobs include the new tests and package
+the Studio example, but were not dispatched here.
+
+Final Studio release checks on the same Linux host passed: native three-frame
+Studio-panel smoke, example project/voicebank validation, and an independently
+verified FLAC export (`flac --test --silent`). The 8-second, four-track example
+(two harmony singers plus drums/bass) rendered 384,000 frames at 48 kHz in
+1.826 seconds (4.38x duration), peak 0.148476, with zero samples over full scale.
+The FLAC was 1,431,278 bytes; the release executable was 11,538,872 bytes. These
+are single-run measurements of generated fixture material, not hardware latency
+or human singing quality measurements. No build/activation/rollout on the operator's
+monolith, publishing, or remote workflow dispatch was performed.
+
+## Multilingual and procedural increment
+
+Implemented native locale selection, layered UI catalogs, independent language
+preferences, discoverable pronunciation profiles/TSV dictionaries, procedural
+voicebanks, inventory-aware Studio and offline English language guides, including
+Latin voicebanks. Punctuation is separate phrase metadata; note timing remains
+explicit. This increment is untested; previous validation counts do not cover it.
+No human singing or native Windows/macOS validation was performed. See
+[operator checks](LANGUAGES.md#punctuation-and-validation).

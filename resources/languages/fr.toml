@@ -1,0 +1,485 @@
+version = 1
+language = "fr"
+name = "French"
+inventory = "fr-ipa"
+provider = "dictionary"
+provider_version = "1"
+license = "BSD-3-Clause; original Songbird starter resource"
+attribution = "Songbird contributors; starter mappings, not a comprehensive pronunciation lexicon"
+capabilities = ["manual", "dictionary", "literal-rules"]
+scripts = ["Unicode"]
+syllabification = "explicit"
+
+[timing]
+consonant_fraction = 0.35
+consonant_max = 0.075
+crossfade_ms = 4.0
+allow_consonant_syllables = false
+
+[dictionary]
+"bonjour" = "b ɔ̃ / ʒ u ʁ"
+"monde" = "m ɔ̃ d"
+"salut" = "s a / l y"
+"musique" = "m y / z i k"
+"amour" = "a / m u ʁ"
+
+[[phones]]
+id = "a"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme a; record your chosen pronunciation"
+prompt = "Hold a steadily"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɑ"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɑ; record your chosen pronunciation"
+prompt = "Hold ɑ steadily"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "e"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme e; record your chosen pronunciation"
+prompt = "Hold e steadily"
+formants = [400, 2000, 2600]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɛ"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɛ; record your chosen pronunciation"
+prompt = "Hold ɛ steadily"
+formants = [530, 1840, 2480]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ə"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ə; record your chosen pronunciation"
+prompt = "Hold ə steadily"
+formants = [500, 1500, 2500]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "i"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme i; record your chosen pronunciation"
+prompt = "Hold i steadily"
+formants = [270, 2290, 3010]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "o"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme o; record your chosen pronunciation"
+prompt = "Hold o steadily"
+formants = [450, 800, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɔ"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɔ; record your chosen pronunciation"
+prompt = "Hold ɔ steadily"
+formants = [570, 840, 2410]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "u"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme u; record your chosen pronunciation"
+prompt = "Hold u steadily"
+formants = [300, 870, 2240]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "y"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme y; record your chosen pronunciation"
+prompt = "Hold y steadily"
+formants = [300, 1700, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ø"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ø; record your chosen pronunciation"
+prompt = "Hold ø steadily"
+formants = [400, 1500, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "œ"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme œ; record your chosen pronunciation"
+prompt = "Hold œ steadily"
+formants = [550, 1500, 2400]
+manner = "vowel"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɛ̃"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɛ̃; record your chosen pronunciation"
+prompt = "Hold ɛ̃ steadily"
+formants = [530, 1840, 2480]
+manner = "vowel"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɑ̃"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɑ̃; record your chosen pronunciation"
+prompt = "Hold ɑ̃ steadily"
+formants = [730, 1090, 2440]
+manner = "vowel"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɔ̃"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɔ̃; record your chosen pronunciation"
+prompt = "Hold ɔ̃ steadily"
+formants = [570, 840, 2410]
+manner = "vowel"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "œ̃"
+vowel = true
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme œ̃; record your chosen pronunciation"
+prompt = "Hold œ̃ steadily"
+formants = [550, 1500, 2400]
+manner = "vowel"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "p"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "French phoneme p; record your chosen pronunciation"
+prompt = "Record a clear p onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "b"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "French phoneme b; record your chosen pronunciation"
+prompt = "Record a clear b onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "t"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "French phoneme t; record your chosen pronunciation"
+prompt = "Record a clear t onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "d"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "French phoneme d; record your chosen pronunciation"
+prompt = "Record a clear d onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "k"
+vowel = false
+voiced = false
+syllabic = false
+stop = true
+description = "French phoneme k; record your chosen pronunciation"
+prompt = "Record a clear k onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "g"
+vowel = false
+voiced = true
+syllabic = false
+stop = true
+description = "French phoneme g; record your chosen pronunciation"
+prompt = "Record a clear g onset or syllabic sound"
+manner = "stop"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "f"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "French phoneme f; record your chosen pronunciation"
+prompt = "Record a clear f onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "v"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme v; record your chosen pronunciation"
+prompt = "Record a clear v onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "s"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "French phoneme s; record your chosen pronunciation"
+prompt = "Record a clear s onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 4500.0
+
+[[phones]]
+id = "z"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme z; record your chosen pronunciation"
+prompt = "Record a clear z onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 4500.0
+
+[[phones]]
+id = "ʃ"
+vowel = false
+voiced = false
+syllabic = false
+stop = false
+description = "French phoneme ʃ; record your chosen pronunciation"
+prompt = "Record a clear ʃ onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "ʒ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ʒ; record your chosen pronunciation"
+prompt = "Record a clear ʒ onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "m"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme m; record your chosen pronunciation"
+prompt = "Record a clear m onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "n"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme n; record your chosen pronunciation"
+prompt = "Record a clear n onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɲ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɲ; record your chosen pronunciation"
+prompt = "Record a clear ɲ onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ŋ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ŋ; record your chosen pronunciation"
+prompt = "Record a clear ŋ onset or syllabic sound"
+manner = "nasal"
+nasal = true
+noise_cutoff = 500.0
+
+[[phones]]
+id = "l"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme l; record your chosen pronunciation"
+prompt = "Record a clear l onset or syllabic sound"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ʁ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ʁ; record your chosen pronunciation"
+prompt = "Record a clear ʁ onset or syllabic sound"
+manner = "fricative"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "j"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme j; record your chosen pronunciation"
+prompt = "Record a clear j onset or syllabic sound"
+manner = "affricate"
+nasal = false
+noise_cutoff = 1800.0
+
+[[phones]]
+id = "w"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme w; record your chosen pronunciation"
+prompt = "Record a clear w onset or syllabic sound"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+
+[[phones]]
+id = "ɥ"
+vowel = false
+voiced = true
+syllabic = false
+stop = false
+description = "French phoneme ɥ; record your chosen pronunciation"
+prompt = "Record a clear ɥ onset or syllabic sound"
+manner = "approximant"
+nasal = false
+noise_cutoff = 500.0
+

@@ -75,12 +75,18 @@ fn main() -> Result<()> {
             high: 76,
             onset: 0.,
             sustain: 0.04,
+            release: None,
             end: 0.46,
             voiced: true,
             style: "normal".into(),
             register: "alto".into(),
+            gain: 1.,
         }],
         dictionary: BTreeMap::from([("AH".into(), "AA".into())]),
+        language: None,
+        inventory: None,
+        provider: None,
+        generation: None,
     };
     std::fs::write(
         p.root.join("voices/analytic/voicebank.toml"),

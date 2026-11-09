@@ -13,9 +13,9 @@ fn main() -> Result<()> {
     };
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => println!(
-            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
+            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT [BANK]\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
         ),
-        Some("gui-smoke") => gui::smoke(Project::open(Path::new(arg(1)?))?)?,
+        Some("gui-smoke") => gui::smoke(Project::open(Path::new(arg(1)?))?, args.get(2).cloned())?,
         Some("recover-take") => println!("{}", codec::recover_wav(Path::new(arg(1)?))?.display()),
         Some("new") => {
             let p = Project::create(Path::new(arg(1)?), gui::DEFAULT.into())?;
@@ -66,11 +66,11 @@ fn main() -> Result<()> {
         Some("recover") => Project::recover(Path::new(arg(1)?))?,
         Some(s) if s.starts_with('-') => bail!("unknown option {s}"),
         _ => {
-            let root = PathBuf::from(
-                args.first()
-                    .map(String::as_str)
-                    .unwrap_or("songbird-project"),
-            );
+            let root = if let Some(path) = args.first() {
+                PathBuf::from(path)
+            } else {
+                default_project()?
+            };
             let p = if root.join("project.toml").exists() {
                 Project::open(&root)?
             } else {
@@ -80,4 +80,26 @@ fn main() -> Result<()> {
         }
     }
     Ok(())
+}
+
+fn default_project() -> Result<PathBuf> {
+    #[cfg(windows)]
+    {
+        Ok(PathBuf::from(
+            std::env::var_os("USERPROFILE")
+                .context("USERPROFILE is unavailable; supply a project path")?,
+        )
+        .join("Music/Songbird"))
+    }
+    #[cfg(target_os = "macos")]
+    {
+        Ok(PathBuf::from(
+            std::env::var_os("HOME").context("HOME is unavailable; supply a project path")?,
+        )
+        .join("Music/Songbird"))
+    }
+    #[cfg(all(not(windows), not(target_os = "macos")))]
+    {
+        Ok(PathBuf::from("songbird-project"))
+    }
 }

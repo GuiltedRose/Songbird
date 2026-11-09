@@ -1,0 +1,45 @@
+version = 1
+name = "Synthetic M IY S — engineering fixture, not a human voice"
+license = "CC0-1.0; original generated audio; see example README"
+
+[[samples]]
+phoneme = "M"
+file = "samples/M.wav"
+root = 220.0
+low = 48
+high = 72
+onset = 0.1
+sustain = 0.15
+release = 0.65
+end = 0.7
+voiced = true
+style = "normal"
+register = "alto"
+
+[[samples]]
+phoneme = "IY"
+file = "samples/IY.wav"
+root = 220.0
+low = 48
+high = 72
+onset = 0.1
+sustain = 0.15
+release = 0.65
+end = 0.7
+voiced = true
+style = "normal"
+register = "alto"
+
+[[samples]]
+phoneme = "S"
+file = "samples/S.wav"
+root = 220.0
+low = 48
+high = 72
+onset = 0.1
+sustain = 0.15
+release = 0.65
+end = 0.7
+voiced = false
+style = "normal"
+register = "alto"

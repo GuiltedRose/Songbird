@@ -1,6 +1,6 @@
 use anyhow::{Result, bail, ensure};
 use serde::{Deserialize, Serialize};
-use std::collections::BTreeMap;
+use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Score {
@@ -13,6 +13,12 @@ pub struct Score {
     pub tracks: Vec<Track>,
     pub voices: BTreeMap<String, Voice>,
     pub master: Vec<Effect>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub inventory: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 impl Default for Score {
     fn default() -> Self {
@@ -26,6 +32,9 @@ impl Default for Score {
             tracks: vec![],
             voices: BTreeMap::new(),
             master: vec![],
+            language: None,
+            inventory: None,
+            provider: None,
         }
     }
 }
@@ -34,6 +43,12 @@ pub struct Voice {
     pub bank: String,
     pub register: String,
     pub style: String,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub inventory: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Track {
@@ -64,6 +79,27 @@ pub struct Track {
     pub automation: Vec<Automation>,
     pub transpose: i32,
     pub reverse: bool,
+    #[serde(default)]
+    pub vocal_preset: Option<String>,
+    #[serde(default)]
+    pub vocal_overrides: BTreeSet<String>,
+    #[serde(default = "one")]
+    pub formant: f32,
+    #[serde(default = "one")]
+    pub dynamics: f32,
+    #[serde(default)]
+    pub vocal_pitch: f32,
+    #[serde(default)]
+    pub harmonies: Vec<i32>,
+    #[serde(default)]
+    pub language: Option<String>,
+    #[serde(default)]
+    pub inventory: Option<String>,
+    #[serde(default)]
+    pub provider: Option<String>,
+}
+fn one() -> f32 {
+    1.
 }
 impl Track {
     pub fn new(name: String) -> Self {
@@ -95,6 +131,15 @@ impl Track {
             automation: vec![],
             transpose: 0,
             reverse: false,
+            vocal_preset: None,
+            vocal_overrides: BTreeSet::new(),
+            formant: 1.,
+            dynamics: 1.,
+            vocal_pitch: 0.,
+            harmonies: vec![],
+            language: None,
+            inventory: None,
+            provider: None,
         }
     }
 }
@@ -174,7 +219,11 @@ pub fn note(s: &str) -> Result<i32> {
     let octave: i32 = s[i..]
         .parse()
         .map_err(|_| anyhow::anyhow!("invalid octave: {s}"))?;
-    let n = (octave + 1) * 12 + base + acc;
+    let n = octave
+        .checked_add(1)
+        .and_then(|o| o.checked_mul(12))
+        .and_then(|o| o.checked_add(base + acc))
+        .ok_or_else(|| anyhow::anyhow!("note outside MIDI range: {s}"))?;
     ensure!((0..=127).contains(&n), "note outside MIDI range: {s}");
     Ok(n)
 }
@@ -283,7 +332,7 @@ fn number(v: &[String], i: usize) -> Result<f32> {
     ensure!(n.is_finite(), "nonfinite number");
     Ok(n)
 }
-fn effect(v: &[String]) -> Result<Effect> {
+pub(crate) fn effect(v: &[String]) -> Result<Effect> {
     ensure!(!v.is_empty(), "effect name required");
     let count = match v[0].as_str() {
         "eq" => 3,
@@ -339,6 +388,9 @@ pub fn parse(src: &str) -> Result<Score> {
         let v = &rows[i];
         let result = (|| -> Result<()> {
             match v[0].as_str() {
+                "language" => score.language = Some(crate::locale::normalize(arg(v, 1)?)?),
+                "inventory" => score.inventory = Some(crate::locale::normalize(arg(v, 1)?)?),
+                "provider" => score.provider = Some(arg(v, 1)?.into()),
                 "project" => score.name = arg(v, 1)?.into(),
                 "tempo" => {
                     score.tempo = number(v, 1)? as f64;
@@ -388,8 +440,12 @@ pub fn parse(src: &str) -> Result<Score> {
                             "register" => voice.register = arg(r, 1)?.into(),
                             "expression" => voice.style = arg(r, 1)?.into(),
                             "language" => {
-                                ensure!(arg(r, 1)? == "english", "only English currently supported")
+                                voice.language = Some(crate::locale::normalize(arg(r, 1)?)?)
                             }
+                            "inventory" => {
+                                voice.inventory = Some(crate::locale::normalize(arg(r, 1)?)?)
+                            }
+                            "provider" => voice.provider = Some(arg(r, 1)?.into()),
                             _ => bail!("unknown voice directive {}", r[0]),
                         }
                         i += 1;
@@ -492,7 +548,52 @@ fn parse_track(
     instruments: &BTreeMap<String, Track>,
     tempo: f64,
 ) -> Result<()> {
+    if [
+        "gain",
+        "pan",
+        "vibrato",
+        "breathiness",
+        "expression",
+        "formant",
+        "dynamics",
+        "vocal-pitch",
+        "harmony",
+    ]
+    .contains(&v[0].as_str())
+    {
+        t.vocal_overrides.insert(v[0].clone());
+    }
     match v[0].as_str() {
+        "language" => t.language = Some(crate::locale::normalize(arg(v, 1)?)?),
+        "inventory" => t.inventory = Some(crate::locale::normalize(arg(v, 1)?)?),
+        "provider" => t.provider = Some(arg(v, 1)?.into()),
+        "vocal-preset" => t.vocal_preset = Some(arg(v, 1)?.into()),
+        "formant" => {
+            let n = number(v, 1)?;
+            ensure!((0.5..=2.).contains(&n), "formant ratio .5..2");
+            t.formant = n;
+        }
+        "dynamics" => {
+            let n = number(v, 1)?;
+            ensure!((0.0..=2.).contains(&n), "dynamics range 0..2");
+            t.dynamics = n;
+        }
+        "vocal-pitch" => {
+            let n = number(v, 1)?;
+            ensure!(n.abs() <= 24., "vocal-pitch range -24..24 semitones");
+            t.vocal_pitch = n;
+        }
+        "harmony" => {
+            let h = arg(v, 1)?
+                .split_whitespace()
+                .map(str::parse)
+                .collect::<std::result::Result<Vec<i32>, _>>()?;
+            ensure!(
+                !h.is_empty() && h.len() <= 8 && h.iter().all(|n| (-24..=24).contains(n)),
+                "harmony needs 1..8 semitone offsets in -24..24"
+            );
+            t.harmonies = h;
+        }
         "synth" => t.instrument = arg(v, 1)?.into(),
         "instrument" => {
             let name = arg(v, 1)?;
@@ -547,7 +648,7 @@ fn parse_track(
         "at" => t.at = seconds(arg(v, 1)?, tempo)?,
         "transpose" => {
             t.transpose = arg(v, 1)?.parse()?;
-            ensure!(t.transpose.abs() <= 48, "transpose range -48..48");
+            ensure!((-48..=48).contains(&t.transpose), "transpose range -48..48");
         }
         "retrograde" => t.reverse = true,
         "repeat" => {

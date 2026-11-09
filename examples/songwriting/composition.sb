@@ -1,0 +1,68 @@
+project "Night Walk"
+tempo 108
+signature 4/4
+bars 16
+rate 48000
+bits 24
+
+instrument warm_bass {
+    synth saw
+    adsr 0.01 0.15 0.55 0.08
+    filter 800
+    gain -15db
+}
+instrument soft_chords {
+    synth triangle
+    adsr 0.07 0.1 0.55 0.3
+    gain -18db
+    reverb 0.22
+}
+instrument bright_lead {
+    synth square
+    adsr 0.01 0.12 0.4 0.1
+    filter 1800
+    gain -20db
+    pan 0.2
+    delay 0.25 0.25 0.15
+}
+
+# Fourteen bars of drums; the final two bars leave room for effect tails.
+track drums {
+    instrument drumkit
+    pattern "(kick - snare hat kick hat snare hat)*14"
+    gain -15db
+}
+
+section intro at 0b {
+    track bass {
+        instrument warm_bass
+        notes "C2:4*4"
+    }
+}
+
+section verse at 16b {
+    track bass {
+        instrument warm_bass
+        notes "(C2:1 -:1 G2:1 Bb2:1)*8"
+    }
+    track chords {
+        instrument soft_chords
+        notes "([C3,Eb3,G3]:4 [Ab2,C3,Eb3]:4 [Bb2,D3,F3]:4 [G2,B2,D3]:4)*2"
+    }
+    track melody {
+        instrument bright_lead
+        notes "(G4:1 Eb4:1 D4:1 C4:1)*8"
+    }
+}
+
+section ending at 48b {
+    track bass {
+        instrument warm_bass
+        notes "C2:8"
+    }
+    track melody {
+        instrument bright_lead
+        notes "G4:2 Eb4:2 C4:4"
+    }
+}
+master limit -1

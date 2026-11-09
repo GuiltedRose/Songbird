@@ -1,9 +1,37 @@
 # Songbird
 
-Songbird is an offline music workstation for Linux. Write music in a code editor,
+Songbird is an offline music workstation with native Linux, Windows, and macOS build targets. Write music in a code editor,
 record or import audio, mix tracks, and export WAV or FLAC—all in one native app.
 
-## Build and open the example
+## Make music with code
+
+Build a beat, add a bass line, write chords and a melody, then arrange your parts
+into a song. Record your own performances alongside them and export the mix.
+Your composition is an editable score: you decide what plays, how it sounds, and
+when each part enters.
+
+Start with the [complete songwriting walkthrough](docs/MAKING_MUSIC.md). It teaches
+the musical decisions behind the code and takes you from a repeating groove to
+a sixteen-bar arrangement with an intro, verse, ending, and recorded performance.
+The accompanying [Night Walk project](examples/songwriting/composition.sb) is
+ready to open:
+
+```sh
+./target/release/songbird examples/songwriting
+```
+
+Use `target/release/songbird.exe` on Windows. Press **Ctrl+P** to listen,
+**Ctrl+E** to edit, and **Ctrl+Enter** to apply changes. The sections below cover
+setup and the everyday recording, editing, and export workflow.
+
+Keep these references nearby as you compose:
+
+- [Composition language and commands](docs/LANGUAGE.md)
+- [Create your first voicebank](docs/FIRST_VOICEBANK.md)
+- [Voicebank commands, vocal presets, and pronunciation overrides](docs/VOICEBANKS.md)
+- [English pronunciation dictionary](data/cmudict.dict) and [dictionary guide](data/README.md)
+
+## Build on Linux and open the example
 
 Use Rust 1.97.1 and Cargo, a C linker, `pkg-config`, ALSA development files, and
 a Linux desktop with OpenGL and X11 or Wayland.
@@ -25,6 +53,30 @@ cargo build --release --locked --offline
 The first dependency download needs internet. After that, Songbird works offline.
 Press **Ctrl+P** to hear the example. It combines drums, bass, melody, imported
 audio, and a synthetic vowel voicebank. Press **Ctrl+P** again to stop.
+
+## Windows and macOS
+
+The [desktop workflow](.github/workflows/desktop.yml) builds, tests, and packages
+Windows and macOS on GitHub-hosted runners after pushes and pull requests. You can
+also run it from **Actions → Desktop builds → Run workflow** once it is on the
+default branch. Download the matching artifact from a successful run. The macOS
+archive contains `Songbird.app`; Windows includes `Start-Songbird.cmd`.
+
+To build locally, use Rust 1.97.1 with **Visual Studio C++ Build Tools and the
+Windows SDK** on Windows, or **Xcode Command Line Tools** on macOS:
+
+```sh
+cargo fetch --locked
+cargo build --release --locked --offline
+```
+
+Launch `target/release/songbird.exe examples/acceptance` on Windows, or
+`./target/release/songbird examples/acceptance` on macOS. Native audio uses WASAPI
+on Windows and CoreAudio on macOS. The launcher/no-argument app creates or opens
+`Music/Songbird` under your user profile/home directory on these platforms.
+
+See the [native platform guide](docs/PLATFORMS.md) for launchers, permissions,
+and platform-specific setup.
 
 ## Learn the workspace
 
@@ -51,7 +103,7 @@ and saved recording paths. The transport shows playback position and audio meter
 Use the editor's normal undo/redo shortcuts for text edits. The prompt also has
 `undo` and `redo` commands for evaluation and import snapshots.
 
-## Make your first song
+## Start a new composition
 
 Create a project in a new directory, then open it. Run these in your **shell**:
 
@@ -97,7 +149,8 @@ master limit -1
 Press **Ctrl+Enter** to check it, then **Ctrl+P** to play. Check the console if
 something fails. Press **Ctrl+S** to save.
 
-Here is how to change the music:
+Listen for the bass anchoring the beat and the higher melody adding movement.
+Change one part at a time, evaluate, and listen again:
 
 - `tempo 120` sets beats per minute; `bars 4` sets the song's total length.
 - `C4:1` plays C in octave 4 for one quarter-note beat. Without `:duration`, an
@@ -178,17 +231,41 @@ chooses WAV. FLAC capture retains a recoverable WAV alongside the finished FLAC.
 You can record while music plays. For monitoring and stereo capture, see the
 [audio setup guide](docs/OPERATIONS.md#device-and-recording-acceptance).
 
-## Use a singing voice
+## Build a singer in Voicebank Studio
 
-The bundled example's `Analytic` voice sings an “ah” vowel. Open
-`examples/acceptance` to see how its `voice`, `lyrics`, and `notes` statements fit
-together.
+Create a custom singer from your own recorded material, prepare its samples,
+check English phoneme coverage, and audition lyrics without exporting a song.
+Open the Studio from the **command prompt**:
 
-For English lyrics, create a voicebank from recordings you are authorized to use.
-A bank contains phoneme samples and a `voicebank.toml` describing their timing,
-pitch ranges, registers, and expression styles. Follow the
-[voicebank guide](docs/VOICEBANKS.md) to record, label, validate, and use one.
-The analytic example cannot sing arbitrary English words.
+```text
+voicebank new voices/nova "Nova" english
+voicebank register alto
+voicebank expression normal
+voicebank guide "me see"
+voicebank target IY
+voicebank record
+```
+
+Record a steady “ee,” then enter `record-stop`. Studio shows the take's waveform,
+level/clipping diagnostics, and suggested pitch/timing. Use `voicebank replay`,
+`stop`, and the metadata commands to refine it; `voicebank use` publishes the
+preferred take. Repeat for M and S, then check and preview the phrase:
+
+```text
+voicebank coverage "me see" "A3:1 B3:1"
+voicebank test "me see" "A3:1 B3:1"
+```
+
+Select a real input with `devices` / `input "DEVICE NAME"` before recording.
+[Creating Your First Voicebank](docs/FIRST_VOICEBANK.md) walks through microphone
+setup, alternate takes, trimming, root pitches, pronunciation, saving/reusing
+banks, and creating a portable backing-vocal preset. The
+[Studio command reference](docs/VOICEBANKS.md) covers every control.
+
+To explore before recording, open the
+[Voicebank Studio example](examples/voicebank-studio/README.md). It combines a
+preset-driven singer with drums and bass. Its M/IY/S samples are explicitly
+**generated engineering fixtures**, not a human voice or a full English bank.
 
 ## Save, reopen, and export
 
@@ -221,6 +298,67 @@ You can also render a saved project from the **shell**, without opening the GUI:
 ./target/release/songbird render "$HOME/Music/first-song" "$HOME/Music/first-song/exports/master-v2.flac"
 ```
 
+## Customize the theme
+
+Songbird finds its config automatically:
+
+| Platform | Default config file |
+|---|---|
+| Linux | `$XDG_CONFIG_HOME/songbird/config.toml`, or `~/.config/songbird/config.toml` |
+| Windows | `%APPDATA%\Songbird\config.toml` |
+| macOS | `~/Library/Application Support/Songbird/config.toml` |
+
+`SONGBIRD_CONFIG` overrides the location on every platform. Windows falls back to
+`%USERPROFILE%\AppData\Roaming\Songbird\config.toml` if `APPDATA` is unavailable.
+Start with the commented [example config](config.example.toml). On Linux:
+
+```sh
+mkdir -p "${XDG_CONFIG_HOME:-$HOME/.config}/songbird"
+cp -n config.example.toml "${XDG_CONFIG_HOME:-$HOME/.config}/songbird/config.toml"
+```
+
+The copy command preserves an existing config. Edit that file in your text editor
+and save: **Songbird automatically reloads appearance changes within about half a
+second**, including during playback. Invalid edits leave the last working theme
+in place and show an error in Songbird's console; fix the file and save again.
+No restart is needed for colors, font sizes, or panel visibility.
+
+A minimal config looks like this:
+
+```toml
+version = 1
+
+[theme]
+base = "light"
+accent = "#7c3aed"
+waveform = "#0f766e"
+
+[appearance]
+font_size = 14.0
+editor_font_size = 17.0
+show_tracks = true
+show_console = true
+```
+
+Choose `dark` or `light` as the base. Omitted colors inherit that base; custom
+colors use quoted `#RRGGBB` values. You can customize backgrounds, text, selection,
+syntax colors, waveforms, and the recording indicator—see the example for all
+keys. Fonts accept sizes from 10 to 32. Optional `window_width` and `window_height`
+set the initial window size and require a restart. Reloading applies configured
+panel visibility, replacing temporary `tracks`/`console` toggles.
+
+To try a separate theme file without changing your normal config:
+
+```sh
+SONGBIRD_CONFIG="/absolute/path/to/theme.toml" ./target/release/songbird examples/acceptance
+```
+
+That file is watched too. No config file is created automatically. A missing
+normal config uses defaults; deleting it restores defaults. Invalid startup
+configurations (including a missing explicitly selected file) use defaults and
+report the error. Configuration changes affect appearance only, leaving project
+files and audio settings intact.
+
 ## Help and troubleshooting
 
 Enter `help` in the prompt or run `./target/release/songbird help` in your shell.
@@ -239,12 +377,19 @@ More documentation:
 - [Architecture and resource limits](docs/ARCHITECTURE.md)
 - [Verification results and remaining limitations](docs/STATUS.md)
 
-Hardware recording, capture synchronization, and human English singing still
-need production acceptance testing. The linked status document distinguishes
-implemented behavior from verified results.
-
 ## License
 
 Songbird uses the [BSD-3-Clause license](LICENSE). The bundled CMU pronunciation
 dictionary has its own [license](data/CMUDICT-LICENSE) and
 [provenance](data/README.md).
+
+### Languages and procedural voices
+
+Open `help language` for offline setup, or read [language packs](docs/LANGUAGES.md).
+UI language follows system preferences independently of the singing language.
+English, German, French, Japanese and Latin voice profiles are bundled; Latin is
+voicebank-only. Add more languages with resource files, without editing Rust.
+`voicebank default la` creates a labeled synthetic Latin bank; human recordings
+are optional. Starter dictionaries and synthetic voices are limited examples.
+See [pronunciation and punctuation research](docs/LANGUAGE_RESEARCH.md) for design
+decisions and [per-language guides](docs/languages/) for authoring.
