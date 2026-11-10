@@ -393,3 +393,12 @@ voicebank-only. Add more languages with resource files, without editing Rust.
 are optional. Starter dictionaries and synthetic voices are limited examples.
 See [pronunciation and punctuation research](docs/LANGUAGE_RESEARCH.md) for design
 decisions and [per-language guides](docs/languages/) for authoring.
+
+### Mini-notation and export workflow
+
+Use `notation mini` inside a track to enable cycle-based patterns. See the
+[reference and migration guide](docs/MINI_NOTATION.md), or open `help mini` in
+Songbird. Pause/resume, step/filter automation, region exports and isolated stems
+are described in [DAW workflow](docs/DAW_EXPANSION.md). The shared timeline supports tempo/meter maps, seeking, loops, punch/loop capture,
+count-in, take comping and bounded PCM cache management. See [recording and
+calibration](docs/RECORDING.md) for hardware-dependent alignment limits.

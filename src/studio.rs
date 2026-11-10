@@ -1445,7 +1445,10 @@ pub fn execute(request: Request) -> Result<Output> {
             }
             for p in s.session.target.split('.') {
                 if let Some(v) = s.profile.inventory.phone(p) {
-                    report.push(format!("{p}: {} — {}", v.description, v.prompt));
+                    report.push(format!(
+                        "{p}: {} — reference word / prompt: {}",
+                        v.description, v.prompt
+                    ));
                 }
             }
             report.push("Speak/sing the displayed target; hold vowels steadily, keep stop consonants natural. Pitch suggestions never identify the phoneme.".into());

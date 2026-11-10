@@ -14,7 +14,7 @@ use std::{
     thread,
     time::{Duration, Instant},
 };
-const HELP: &str = "play | stop | eval | save | open DIR | save-as DIR | import FILE | render FILE | devices | input NAME | output NAME | record NAME flac|wav | record-stop | voicebank help | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
+const HELP: &str = "play | stop | pause | resume | seek POSITION | jump MARKER | range START END | loop on|off | restart | marker NAME | eval | save | open DIR | save-as DIR | import FILE | render FILE | render-region FILE START END | stems NEW_DIRECTORY | devices | input NAME | output NAME | record NAME flac|wav | record-at NAME START [END] | record-loop NAME | count-in BARS | pre-roll BARS | latency MS | metronome on|off | takes | take-replay ID | take-use ID [AT [TRIM_START TRIM_END]] | record-stop | voicebank help | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
 pub const DEFAULT: &str = include_str!("../examples/garden/composition.sb");
 enum Job {
     Language(Project, Vec<String>),
@@ -24,19 +24,24 @@ enum Job {
     Convert(Project, String, String, u32, u16),
     Draft(Project),
     Prepare(Project, Option<audio::LiveContext>),
+    Transport(Project, f64, Option<f64>, bool, Option<f64>, u32, bool),
     Render(Project, PathBuf),
+    Region(Project, PathBuf, String, String),
+    Stems(Project, PathBuf),
     Save(Project),
     SaveAs(Project, PathBuf),
     Open(Project, PathBuf),
     Import(Project, PathBuf),
     Validate(Project, String),
+    TakePreview(Project, u32),
 }
 enum Reply {
     Language(Vec<String>),
     Studio(Box<studio::Output>),
     Drafted,
     Saved(String),
-    Prepared(Renderer, String),
+    Prepared(Box<Renderer>, String),
+    Transport(Box<Renderer>, String),
     Message(String),
     Project(Project),
     Imported(String),
@@ -81,12 +86,44 @@ impl Work {
                             p.save_draft()?;
                             Reply::Drafted
                         }
+                        Job::Transport(p, start, end, looping, anchor, count_in, metronome) => {
+                            let mut r = Renderer::prepare(&p.root, language::parse(&p.source)?)?;
+                            let rate = r.score.rate as f64;
+                            let end = end.map_or(r.length, |end| (end * rate).round() as u64);
+                            r.transport(
+                                (anchor.unwrap_or(start) * rate).round() as u64,
+                                end,
+                                looping,
+                            )?;
+                            r.seek((start * rate).round() as u64)?;
+                            r.count_in(count_in);
+                            r.metronome = metronome;
+                            Reply::Transport(Box::new(r), p.source)
+                        }
                         Job::Prepare(p, live) => {
                             let mut r = Renderer::prepare(&p.root, language::parse(&p.source)?)?;
                             if let Some(live) = live {
                                 live.preroll(&mut r)?;
                             }
-                            Reply::Prepared(r, p.source)
+                            Reply::Prepared(Box::new(r), p.source)
+                        }
+                        Job::Region(p, path, start, end) => {
+                            let score = language::parse(&p.source)?;
+                            let start = score.clock()?.parse(&start, &score.markers)?;
+                            let end = score.clock()?.parse(&end, &score.markers)?;
+                            Reply::Message(format!(
+                                "Export: {:?}",
+                                crate::export::region(&p.root, score, &path, start, end)?
+                            ))
+                        }
+                        Job::Stems(p, path) => {
+                            let reports =
+                                crate::export::stems(&p.root, &language::parse(&p.source)?, &path)?;
+                            Reply::Message(format!(
+                                "Exported {} post-fader stems without master effects to {}",
+                                reports.len(),
+                                path.display()
+                            ))
                         }
                         Job::Render(p, path) => {
                             let mut r = Renderer::prepare(&p.root, language::parse(&p.source)?)?;
@@ -108,6 +145,29 @@ impl Work {
                             Reply::Project(Project::open(&path)?)
                         }
                         Job::Import(p, path) => Reply::Imported(p.import(&path)?),
+                        Job::TakePreview(p, id) => {
+                            let take = crate::recording::takes(&p.root)?
+                                .into_iter()
+                                .find(|t| t.id == id)
+                                .context("unknown take")?;
+                            let source = format!(
+                                "rate 48000; bars 4096; {}",
+                                crate::recording::clip(&take, "preview", 0., None)?
+                            );
+                            let mut score = language::parse(&source)?;
+                            score.bars = 1800;
+                            let mut renderer = Renderer::prepare(&p.root, score)?;
+                            if let Some(clip) =
+                                renderer.tracks.first().and_then(|t| t.clips.first())
+                            {
+                                renderer.length = ((clip.spec.end.unwrap_or(clip.audio.duration())
+                                    - clip.spec.start)
+                                    * renderer.score.rate as f64)
+                                    .round()
+                                    as u64;
+                            }
+                            Reply::Transport(Box::new(renderer), p.source)
+                        }
                         Job::Validate(p, name) => {
                             Reply::Message(crate::voice::validate(&p.root, &name)?)
                         }
@@ -170,6 +230,11 @@ pub struct App {
     pending_find: bool,
     waveform: Vec<f32>,
     pending_play: bool,
+    cursor_seconds: f64,
+    playback_range: Option<(f64, f64)>,
+    loop_enabled: bool,
+    pending_record: Option<(String, String, f64, f64)>,
+    recording_placement: Option<f64>,
     dirty: bool,
     draft_at: Instant,
     smoke_frames: Option<u32>,
@@ -235,6 +300,11 @@ impl App {
             pending_find: false,
             waveform: vec![],
             pending_play: false,
+            cursor_seconds: 0.,
+            playback_range: None,
+            loop_enabled: false,
+            pending_record: None,
+            recording_placement: None,
             dirty: false,
             draft_at: Instant::now(),
             smoke_frames: None,
@@ -244,6 +314,14 @@ impl App {
         if let Some(warning) = warning {
             app.log(warning);
         }
+        match crate::timeline::Transport::load(&app.project.root) {
+            Ok(state) => {
+                app.cursor_seconds = state.cursor;
+                app.playback_range = state.range;
+                app.loop_enabled = state.looping;
+            }
+            Err(error) => app.log(format!("Transport preferences: {error:#}")),
+        }
         app
     }
     fn log(&mut self, s: impl Into<String>) {
@@ -252,12 +330,42 @@ impl App {
             self.console.remove(0);
         }
     }
+    fn start_transport(&mut self) -> Result<()> {
+        ensure!(
+            self.recording.is_none(),
+            "stop timeline recording before changing transport"
+        );
+        let (start, end) = if let Some((a, b)) = self.playback_range {
+            (
+                if self.cursor_seconds >= a && self.cursor_seconds < b {
+                    self.cursor_seconds
+                } else {
+                    a
+                },
+                Some(b),
+            )
+        } else {
+            (self.cursor_seconds, None)
+        };
+        self.work.send(Job::Transport(
+            self.project.clone(),
+            start,
+            end,
+            self.loop_enabled,
+            self.playback_range.map(|r| r.0),
+            0,
+            self.config.recording.metronome,
+        ))
+    }
     fn evaluate(&mut self, play: bool) -> Result<()> {
         ensure!(
             !self.audition,
             "stop the voicebank preview before evaluating the song"
         );
         self.history.checkpoint(&self.last_evaluated);
+        if play || (self.loop_enabled && self.playback.is_some()) {
+            return self.start_transport();
+        }
         self.pending_play = play;
         self.work.send(Job::Prepare(
             self.project.clone(),
@@ -337,6 +445,7 @@ impl App {
                     input_name: self.input.as_deref(),
                     output_name: self.output.as_deref(),
                     monitoring: self.monitor,
+                    gate: None,
                 },
             )?);
             self.bank_capture = Some((view.bank.clone(), capture.clone()));
@@ -448,7 +557,109 @@ impl App {
             }
             "play" => self.evaluate(true)?,
             "eval" => self.evaluate(false)?,
-            "stop" => self.stop()?,
+            "stop" => {
+                if let Some(p) = &self.playback {
+                    self.cursor_seconds = p.state.frames.load(std::sync::atomic::Ordering::Relaxed)
+                        as f64
+                        / p.rate as f64;
+                }
+                self.stop()?;
+            }
+            "seek" | "jump" => {
+                let score = language::parse(&self.project.source)?;
+                let value = arg(1)?;
+                let position = if v[0] == "jump" {
+                    format!("@{value}")
+                } else {
+                    value
+                };
+                let seconds = score.clock()?.parse(&position, &score.markers)?;
+                ensure!(
+                    seconds < score.duration(),
+                    "position lies beyond arrangement end"
+                );
+                if let Some((a, b)) = self.playback_range {
+                    ensure!(
+                        seconds >= a && seconds < b,
+                        "seek lies outside playback range; use range clear first"
+                    );
+                }
+                self.cursor_seconds = seconds;
+                if self.playback.is_some() {
+                    self.start_transport()?;
+                }
+            }
+            "restart" | "home" => {
+                self.playback_range = None;
+                self.loop_enabled = false;
+                self.cursor_seconds = 0.;
+                if self.playback.is_some() {
+                    self.start_transport()?;
+                }
+            }
+            "range" => {
+                if arg(1)? == "clear" {
+                    if let Some(p) = &self.playback {
+                        self.cursor_seconds =
+                            p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
+                                / p.rate as f64;
+                    }
+                    self.playback_range = None;
+                    self.loop_enabled = false;
+                } else {
+                    let score = language::parse(&self.project.source)?;
+                    let clock = score.clock()?;
+                    let a = clock.parse(&arg(1)?, &score.markers)?;
+                    let b = clock.parse(&arg(2)?, &score.markers)?;
+                    ensure!(
+                        a < b && b <= score.duration(),
+                        "range requires start < end <= arrangement end"
+                    );
+                    self.playback_range = Some((a, b));
+                    self.cursor_seconds = a;
+                }
+                if self.playback.is_some() {
+                    self.start_transport()?;
+                }
+            }
+            "loop" => {
+                let value = arg(1)?;
+                ensure!(["on", "off"].contains(&value.as_str()), "loop on|off");
+                ensure!(
+                    value == "off" || self.playback_range.is_some(),
+                    "set range START END before enabling loop"
+                );
+                if let Some(p) = &self.playback {
+                    self.cursor_seconds = p.state.frames.load(std::sync::atomic::Ordering::Relaxed)
+                        as f64
+                        / p.rate as f64;
+                }
+                self.loop_enabled = value == "on";
+                if self.playback.is_some() {
+                    self.start_transport()?;
+                }
+            }
+            "marker" => {
+                let score = language::parse(&self.project.source)?;
+                let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| {
+                    p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / p.rate as f64
+                });
+                let beat = score.clock()?.beat(seconds);
+                let name = arg(1)?;
+                ensure!(!name.contains(['"', '\n', '\r']), "invalid marker name");
+                self.project
+                    .source
+                    .push_str(&format!("\nmarker \"{name}\" at {beat}b\n"));
+                self.dirty = true;
+            }
+            "pause" | "resume" => {
+                let playback = self.playback.as_ref().context("start playback first")?;
+                if v[0] == "pause" {
+                    playback.pause()?;
+                } else {
+                    playback.resume()?;
+                }
+            }
             "save" => self.work.send(Job::Save(self.project.clone()))?,
             "open" => {
                 ensure!(
@@ -475,6 +686,20 @@ impl App {
             "import" => self
                 .work
                 .send(Job::Import(self.project.clone(), PathBuf::from(arg(1)?)))?,
+            "render-region" | "stems" => {
+                let name = arg(1)?;
+                ensure!(
+                    std::path::Path::new(&name).components().count() == 1 && !name.starts_with('.'),
+                    "export takes a name inside exports/"
+                );
+                let path = self.project.root.join("exports").join(name);
+                let job = if v[0] == "stems" {
+                    Job::Stems(self.project.clone(), path)
+                } else {
+                    Job::Region(self.project.clone(), path, arg(2)?, arg(3)?)
+                };
+                self.work.send(job)?;
+            }
             "render" => {
                 let name = arg(1)?;
                 ensure!(
@@ -513,6 +738,98 @@ impl App {
                 ensure!(self.recording.is_none(), "set monitoring before recording");
                 self.monitor = value == "on";
             }
+            "latency" | "count-in" | "pre-roll" | "metronome" => {
+                ensure!(
+                    self.recording.is_none(),
+                    "finish recording before changing capture settings"
+                );
+                self.config.recording = crate::recording::preference(&v[0], &arg(1)?)?;
+            }
+            "record-at" | "record-loop" => {
+                ensure!(
+                    self.recording.is_none()
+                        && self.finishing.is_none()
+                        && self.pending_record.is_none(),
+                    "finish the current take first"
+                );
+                let score = language::parse(&self.project.source)?;
+                let clock = score.clock()?;
+                let loop_capture = v[0] == "record-loop";
+                let start = if loop_capture {
+                    self.playback_range
+                        .context("set range before record-loop")?
+                        .0
+                } else {
+                    clock.parse(&arg(2)?, &score.markers)?
+                };
+                let end = if loop_capture {
+                    self.playback_range.unwrap().1
+                } else if let Some(value) = v.get(3) {
+                    clock.parse(value, &score.markers)?
+                } else {
+                    score.duration()
+                };
+                ensure!(
+                    start < end && end <= score.duration(),
+                    "record-at NAME START [END] must lie inside arrangement"
+                );
+                let (bar, _, _, _) = clock.position(clock.beat(start));
+                let pre_roll = clock
+                    .seconds(
+                        clock.bar_beat(
+                            bar.saturating_sub(self.config.recording.pre_roll_bars)
+                                .max(1),
+                        ),
+                    )
+                    .min(start);
+                self.loop_enabled = loop_capture;
+                self.pending_record = Some((arg(1)?, "flac".into(), start, end));
+                self.work.send(Job::Transport(
+                    self.project.clone(),
+                    if loop_capture { start } else { pre_roll },
+                    Some(end),
+                    loop_capture,
+                    if loop_capture { Some(start) } else { None },
+                    self.config.recording.count_in_bars,
+                    self.config.recording.metronome,
+                ))?;
+            }
+            "take-replay" => self
+                .work
+                .send(Job::TakePreview(self.project.clone(), arg(1)?.parse()?))?,
+            "takes" => {
+                for take in crate::recording::takes(&self.project.root)? {
+                    self.log(format!(
+                        "Take {}: {} at {:.3}s, latency {:.1}ms",
+                        take.id, take.file, take.at, take.latency_ms
+                    ));
+                }
+            }
+            "take-use" => {
+                let id: u32 = arg(1)?.parse()?;
+                let take = crate::recording::takes(&self.project.root)?
+                    .into_iter()
+                    .find(|t| t.id == id)
+                    .context("unknown take ID")?;
+                let score = language::parse(&self.project.source)?;
+                let at = if let Some(value) = v.get(2) {
+                    score.clock()?.parse(value, &score.markers)?
+                } else {
+                    take.at
+                };
+                let trim = if v.len() >= 5 {
+                    Some((
+                        language::seconds(&arg(3)?, score.tempo)?,
+                        language::seconds(&arg(4)?, score.tempo)?,
+                    ))
+                } else {
+                    None
+                };
+                let name = format!("take-{}-part-{}", id, score.tracks.len() + 1);
+                let addition = crate::recording::clip(&take, &name, at, trim)?;
+                self.project.source.push_str(&addition);
+                self.dirty = true;
+            }
             "record" => {
                 ensure!(
                     self.recording.is_none() && self.finishing.is_none(),
@@ -530,8 +847,14 @@ impl App {
                         input_name: self.input.as_deref(),
                         output_name: self.output.as_deref(),
                         monitoring: self.monitor,
+                        gate: None,
                     },
                 )?);
+                self.recording_placement =
+                    Some(self.playback.as_ref().map_or(self.cursor_seconds, |p| {
+                        p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
+                            / p.rate as f64
+                    }));
                 self.log("Recording real input; record-stop finalizes a unique take");
             }
             "record-stop" => {
@@ -597,6 +920,14 @@ impl App {
             }
             _ => bail!("unknown command {}; :help", v[0]),
         }
+        if ["seek", "jump", "range", "loop", "restart", "home", "stop"].contains(&v[0].as_str()) {
+            crate::timeline::Transport {
+                cursor: self.cursor_seconds,
+                range: self.playback_range,
+                looping: self.loop_enabled,
+            }
+            .save(&self.project.root)?;
+        }
         Ok(())
     }
 }
@@ -621,15 +952,25 @@ fn highlight(text: &str, palette: Palette, size: f32) -> egui::text::LayoutJob {
             if token.matches('"').count() % 2 == 1 {
                 quoted = !quoted;
             }
-            job.append(
-                token,
-                0.,
-                TextFormat {
-                    font_id: egui::FontId::monospace(size),
-                    color,
-                    ..Default::default()
-                },
-            );
+            for (index, c) in token.char_indices() {
+                let color = if !comment
+                    && (quoted || token.contains('"'))
+                    && "[]<>{},|*/!@?()%~".contains(c)
+                {
+                    palette.accent
+                } else {
+                    color
+                };
+                job.append(
+                    &token[index..index + c.len_utf8()],
+                    0.,
+                    TextFormat {
+                        font_id: egui::FontId::monospace(size),
+                        color,
+                        ..Default::default()
+                    },
+                );
+            }
         }
     }
     job
@@ -672,6 +1013,7 @@ impl eframe::App for App {
             self.work.busy = false;
             match reply {
                 Err(e) => {
+                    self.pending_record = None;
                     self.pending_play = false;
                     self.log(format!("ERROR: {e:#}"));
                 }
@@ -714,7 +1056,57 @@ impl eframe::App for App {
                         }
                     }
                 }
+                Ok(Reply::Transport(r, source)) => {
+                    self.last_evaluated = source;
+                    self.preview = Some(r.score.clone());
+                    let result = self
+                        .stop()
+                        .and_then(|_| Playback::start(*r, self.output.as_deref()));
+                    match result {
+                        Ok(p) => {
+                            if let Some((name, format, start, end)) = self.pending_record.take() {
+                                let gate = crate::recording::Gate {
+                                    transport: p.state.clone(),
+                                    start: (start * p.rate as f64).round() as u64,
+                                    end: (end * p.rate as f64).round() as u64,
+                                    looping: p
+                                        .state
+                                        .loop_end
+                                        .load(std::sync::atomic::Ordering::Relaxed)
+                                        > 0,
+                                    spans: std::sync::Arc::new(Default::default()),
+                                };
+                                match Recording::start(
+                                    &self.project.root,
+                                    &audio::RecordingConfig {
+                                        name: &name,
+                                        format: &format,
+                                        rate: p.rate,
+                                        bits: self.preview.as_ref().map_or(24, |s| s.bits),
+                                        channels: self.channels,
+                                        input_name: self.input.as_deref(),
+                                        output_name: self.output.as_deref(),
+                                        monitoring: self.monitor,
+                                        gate: Some(&gate),
+                                    },
+                                ) {
+                                    Ok(recording) => {
+                                        self.recording = Some(recording);
+                                        self.recording_placement = Some(start);
+                                    }
+                                    Err(e) => self.log(format!("Recording: {e:#}")),
+                                }
+                            }
+                            self.playback = Some(p);
+                        }
+                        Err(e) => {
+                            self.pending_record = None;
+                            self.log(format!("Transport: {e:#}"));
+                        }
+                    }
+                }
                 Ok(Reply::Prepared(r, source)) => {
+                    let r = *r;
                     self.waveform = r
                         .tracks
                         .iter()
@@ -725,7 +1117,7 @@ impl eframe::App for App {
                         })
                         .collect();
                     self.last_evaluated = source;
-                    let result = if let Some(p) = &self.playback {
+                    let result = if let Some(p) = &mut self.playback {
                         p.replace(r)
                     } else if self.pending_play {
                         Playback::start(r, self.output.as_deref()).map(|p| self.playback = Some(p))
@@ -751,6 +1143,11 @@ impl eframe::App for App {
                 Ok(Reply::Project(p)) => {
                     self.studio = None;
                     self.project = p;
+                    let state =
+                        crate::timeline::Transport::load(&self.project.root).unwrap_or_default();
+                    self.cursor_seconds = state.cursor;
+                    self.playback_range = state.range;
+                    self.loop_enabled = state.looping;
                     self.dirty = false;
                     self.last_evaluated = self.project.source.clone();
                     self.history = History::default();
@@ -772,6 +1169,9 @@ impl eframe::App for App {
                 .edit_missed
                 .swap(false, std::sync::atomic::Ordering::Relaxed)
         }) {
+            if let Some(p) = &mut self.playback {
+                p.clear_missed_clock();
+            }
             self.log("Live edit missed its boundary; original playback retained. Evaluate again.");
         }
         if self.finishing.as_ref().is_some_and(|w| w.is_finished()) {
@@ -788,8 +1188,33 @@ impl eframe::App for App {
                         self.bank_pending = Some((bank, path, capture));
                         self.log("Take finalized; waiting for bank analysis worker");
                     } else {
+                        if let Some(at) = self.recording_placement.take() {
+                            let result = crate::recording::register(
+                                &self.project.root,
+                                &path,
+                                at,
+                                self.config.recording.latency_ms,
+                            )
+                            .and_then(|take| {
+                                crate::recording::clip(
+                                    &take,
+                                    &format!("take-{}", take.id),
+                                    take.at,
+                                    None,
+                                )
+                            });
+                            match result {
+                                Ok(clip) => {
+                                    self.project.source.push_str(&clip);
+                                    self.dirty = true;
+                                }
+                                Err(e) => {
+                                    self.log(format!("Take preserved, placement failed: {e:#}"))
+                                }
+                            }
+                        }
                         self.log(format!(
-                            "Take saved: {}. Add import \"{}\" to a track.",
+                            "Take preserved: {} (project path {}). Timeline captures are placed automatically.",
                             path.display(),
                             crate::codec::script_path(
                                 path.strip_prefix(&self.project.root).unwrap_or(&path)
@@ -853,6 +1278,75 @@ impl eframe::App for App {
         {
             self.log(e.to_string());
         }
+        for (key, command) in [
+            (
+                egui::Key::Space,
+                if self
+                    .playback
+                    .as_ref()
+                    .is_some_and(|p| p.state.paused.load(std::sync::atomic::Ordering::Relaxed))
+                {
+                    "resume"
+                } else {
+                    "pause"
+                },
+            ),
+            (
+                egui::Key::R,
+                if self.recording.is_some() {
+                    "record-stop"
+                } else {
+                    "record-at take 0b"
+                },
+            ),
+            (egui::Key::Home, "restart"),
+        ] {
+            let modifiers = if key == egui::Key::Space {
+                egui::Modifiers::CTRL | egui::Modifiers::SHIFT
+            } else {
+                egui::Modifiers::CTRL
+            };
+            if ctx.input_mut(|i| i.consume_key(modifiers, key))
+                && let Err(e) = self.command(command)
+            {
+                self.log(e.to_string());
+            }
+        }
+        if ctx.input_mut(|i| i.consume_key(egui::Modifiers::NONE, egui::Key::F1)) {
+            self.help.open = true;
+        }
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::E)
+        }) {
+            let name = format!(
+                "render mix-{}.flac",
+                std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)
+                    .unwrap_or_default()
+                    .as_millis()
+            );
+            if let Err(e) = self.command(&name) {
+                self.log(e.to_string());
+            }
+        }
+        if ctx.input_mut(|i| {
+            i.consume_key(egui::Modifiers::CTRL | egui::Modifiers::SHIFT, egui::Key::L)
+        }) {
+            let command = if self.loop_enabled {
+                "loop off"
+            } else {
+                "loop on"
+            };
+            if let Err(e) = self.command(command) {
+                self.log(e.to_string());
+            }
+        }
+        for (key, prefix) in [(egui::Key::G, "seek "), (egui::Key::J, "jump ")] {
+            if ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, key)) {
+                self.command = prefix.into();
+                ctx.memory_mut(|m| m.request_focus(egui::Id::new("command-input")));
+            }
+        }
         let eval = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::Enter));
         let save = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::S));
         let play = ctx.input_mut(|i| i.consume_key(egui::Modifiers::CTRL, egui::Key::P));
@@ -875,11 +1369,12 @@ impl eframe::App for App {
             self.log(e.to_string());
         }
         if play {
-            let r = if self.playback.is_some() {
-                self.stop()
+            let command = if self.playback.is_some() {
+                "stop"
             } else {
-                self.evaluate(true)
+                "play"
             };
+            let r = self.command(command);
             if let Err(e) = r {
                 self.log(e.to_string());
             }
@@ -910,21 +1405,61 @@ impl eframe::App for App {
                     };
                     let _ = self.command(c).map_err(|e| self.log(e.to_string()));
                 }
+                if let Some(playback) = &self.playback {
+                    let paused = playback
+                        .state
+                        .paused
+                        .load(std::sync::atomic::Ordering::Relaxed);
+                    if ui.button(if paused { "Resume" } else { "Pause" }).clicked() {
+                        let command = if paused { "resume" } else { "pause" };
+                        let _ = self.command(command).map_err(|e| self.log(e.to_string()));
+                    }
+                }
+                if ui.button("Start").clicked() { let _ = self.command("home").map_err(|e| self.log(e.to_string())); }
+                if ui.button(if self.loop_enabled { "Loop: on" } else { "Loop: off" }).clicked() {
+                    let value = if self.loop_enabled { "loop off" } else { "loop on" };
+                    let _ = self.command(value).map_err(|e| self.log(e.to_string()));
+                }
                 if ui.button(self.catalog.text("Help")).clicked() {
                     self.help.open = true;
                 }
                 if self.work.busy {
                     ui.spinner();
                 }
+                let mut destination = None;
+                if let Some(score) = &self.preview {
+                    for name in score.markers.keys().take(8) { if ui.small_button(name).clicked() { destination = Some(format!("jump {name:?}")); } }
+                }
+                if let Some(command) = destination { let _ = self.command(&command).map_err(|e| self.log(e.to_string())); }
                 if self.recording.is_some() {
                     ui.colored_label(self.palette.recording, self.catalog.text("● REC"));
                 }
             });
             ui.horizontal(|ui| {
+                if let Some((a,b)) = self.playback_range { ui.small(format!("Range {a:.3}–{b:.3}s{}",if self.loop_enabled { " (loop)" } else { "" })); }
                 if let Some(s) = &self.preview {
                     ui.label(format!(
                         "{} BPM  {}/{}  {} Hz / {} bit",
                         s.tempo, s.signature[0], s.signature[1], s.rate, s.bits
+                    ));
+                }
+                if let Some(score) = &self.preview
+                    && let Ok(clock) = score.clock()
+                {
+                    let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| {
+                        p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
+                            / p.rate as f64
+                    });
+                    let clock = self.playback.as_ref().map_or(clock,|p|p.clock().clone());
+                    let beat = clock.beat(seconds);
+                    let (bar, count, tick, sig) = clock.position(beat);
+                    ui.label(format!(
+                        "Bar {bar} | Beat {count} | Tick {tick} · {:.1} BPM · {}/{} · {:.3}/{:.3}s",
+                        clock.bpm(beat),
+                        sig[0],
+                        sig[1],
+                        seconds,
+                        score.duration()
                     ));
                 }
                 if let Some(p) = &self.playback {
@@ -934,6 +1469,11 @@ impl eframe::App for App {
                         p.state.frames.load(Relaxed) as f64 / p.rate as f64,
                         p.state.underruns.load(Relaxed)
                     ));
+                }
+                if let Some(score) = &self.preview {
+                    let duration = score.duration();
+                    let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / p.rate as f64);
+                    ui.add(egui::ProgressBar::new((seconds/duration.max(0.001)).clamp(0.,1.) as f32).desired_width(140.).text(format!("{:.1}s left",(duration-seconds).max(0.))));
                 }
                 ui.label(format!(
                     "OUT {:.1} dB  IN {:.1} dB",
@@ -1022,7 +1562,7 @@ impl eframe::App for App {
                         }
                         ui.heading(self.catalog.text("Tracks"));
                         if let Some(s) = &self.preview {
-                            for t in &s.tracks {
+                            for (index, t) in s.tracks.iter().enumerate() {
                                 ui.monospace(format!(
                                     "{} {}",
                                     if t.mute {
@@ -1034,6 +1574,19 @@ impl eframe::App for App {
                                     },
                                     t.name
                                 ));
+                                if let Some(p) = &self.playback
+                                    && index < 128
+                                {
+                                    let peak = f32::from_bits(
+                                        p.state.track_peaks[index / 32][index % 32]
+                                            .swap(0, std::sync::atomic::Ordering::Relaxed),
+                                    );
+                                    ui.label(format!(
+                                        "{:.1} dB{}",
+                                        20. * peak.max(1e-6).log10(),
+                                        if peak >= 1. { " CLIP" } else { "" }
+                                    ));
+                                }
                                 ui.small(format!(
                                     "{} · {} clips",
                                     t.vocal_preset
@@ -1042,6 +1595,15 @@ impl eframe::App for App {
                                         .unwrap_or(&t.instrument),
                                     t.clips.len()
                                 ));
+                                ui.small(format!("Gain {:.3} · Pan {:.2}", t.gain, t.pan));
+                                for (i, effect) in t.effects.iter().enumerate() {
+                                    ui.small(format!(
+                                        "{}. {} {:?}",
+                                        i + 1,
+                                        effect.kind,
+                                        effect.args
+                                    ));
+                                }
                                 ui.separator();
                             }
                         }
@@ -1125,12 +1687,22 @@ impl eframe::App for App {
                         let options = [
                             "play",
                             "stop",
+                            "pause",
+                            "resume",
+                            "seek",
+                            "jump",
+                            "range",
+                            "loop",
+                            "restart",
+                            "marker",
                             "eval",
                             "save",
                             "save-as",
                             "new",
                             "convert",
                             "render",
+                            "render-region",
+                            "stems",
                             "record",
                             "record-stop",
                             "devices",
@@ -1277,6 +1849,52 @@ impl eframe::App for App {
                 );
                 if response.changed() {
                     self.dirty = true;
+                }
+                if response.has_focus()
+                    && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Space))
+                {
+                    let id = egui::Id::new("composition");
+                    if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
+                        && let Some(range) = state.cursor.char_range()
+                        && range.is_empty()
+                    {
+                        let cursor = range.primary.index;
+                        let byte = self
+                            .project
+                            .source
+                            .char_indices()
+                            .nth(cursor)
+                            .map_or(self.project.source.len(), |(i, _)| i);
+                        let prefix_start = self.project.source[..byte]
+                            .char_indices()
+                            .rev()
+                            .find(|(_, c)| c.is_whitespace() || *c == '"')
+                            .map_or(0, |(i, c)| i + c.len_utf8());
+                        let prefix = &self.project.source[prefix_start..byte];
+                        let options = [
+                            "notation mini",
+                            "cycle 4",
+                            "cycles 4",
+                            "seed 42",
+                            "kick(3,8)",
+                            "hat(5,8,2)",
+                        ];
+                        if !prefix.is_empty()
+                            && let Some(value) =
+                                options.iter().find(|value| value.starts_with(prefix))
+                        {
+                            let position = self.project.source[..prefix_start].chars().count()
+                                + value.chars().count();
+                            self.project.source.replace_range(prefix_start..byte, value);
+                            state
+                                .cursor
+                                .set_char_range(Some(egui::text::CCursorRange::one(
+                                    egui::text::CCursor::new(position),
+                                )));
+                            state.store(ctx, id);
+                            self.dirty = true;
+                        }
+                    }
                 }
             });
         });

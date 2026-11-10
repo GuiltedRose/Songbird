@@ -97,6 +97,14 @@ pub fn automation(t: f64, points: &[[f64; 2]], fallback: f32) -> f32 {
     }
     points.last().unwrap()[1] as f32
 }
+pub fn automation_step(t: f64, points: &[[f64; 2]], fallback: f32) -> f32 {
+    if points.is_empty() {
+        return fallback;
+    }
+    let index = points.partition_point(|p| p[0] <= t).saturating_sub(1);
+    points[index][1] as f32
+}
+#[derive(Clone)]
 pub struct Processor {
     spec: Effect,
     rate: f32,
@@ -133,6 +141,20 @@ impl Processor {
             position: 0,
             combs,
             positions: vec![0; 4],
+        }
+    }
+    pub fn automate_argument(&mut self, parameter: usize, value: f32) {
+        if let Some(argument) = self.spec.args.get_mut(parameter) {
+            *argument = value;
+        }
+    }
+    pub fn state_bytes(&self) -> usize {
+        (self.delay.len() + self.combs.iter().map(Vec::len).sum::<usize>())
+            * std::mem::size_of::<[f32; 2]>()
+    }
+    pub fn automate_filter(&mut self, cutoff: f32) {
+        if self.spec.kind == "filter" {
+            self.spec.args[0] = cutoff;
         }
     }
     pub fn process(&mut self, mut x: [f32; 2]) -> [f32; 2] {

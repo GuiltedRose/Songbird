@@ -164,6 +164,9 @@ impl Project {
             }
         }
         // Include alternate and unused takes, not only assets referenced by the score.
+        if self.root.join("transport.toml").is_file() {
+            copy("transport.toml")?;
+        }
         if self.root.join("language.toml").is_file() {
             copy("language.toml")?;
         }

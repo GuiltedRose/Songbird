@@ -139,7 +139,7 @@ pub fn read_resource<T: serde::de::DeserializeOwned>(file: &Path) -> Result<T> {
     let mut text = String::new();
     f.take(1_048_577).read_to_string(&mut text)?;
     ensure!(text.len() <= 1_048_576, "resource exceeds 1 MiB");
-    Ok(toml::from_str(&text).with_context(|| format!("resource {}", file.display()))?)
+    toml::from_str(&text).with_context(|| format!("resource {}", file.display()))
 }
 impl Profile {
     pub fn validate(&self) -> Result<()> {
@@ -151,7 +151,7 @@ impl Profile {
             "invalid profile metadata"
         );
         locale::normalize(&self.language)?;
-        locale::normalize(&self.inventory)?;
+        ensure!(identifier(&self.inventory), "invalid inventory identifier");
         ensure!(
             ["cmudict", "dictionary", "rules", "manual"].contains(&self.provider.as_str()),
             "unsupported pronunciation provider"
@@ -450,19 +450,19 @@ impl ContextProfile {
                     result.extend(self.parse_output(&mapped)?);
                     rest = &rest[bytes..];
                 } else {
-                    if let Some(file) = &self.pronunciation.dictionary_file {
-                        if let Some(text) = self.pronunciation.lexicon.lookup(
+                    if let Some(file) = &self.pronunciation.dictionary_file
+                        && let Some(text) = self.pronunciation.lexicon.lookup(
                             file,
                             rest,
                             self.pronunciation.case_sensitive,
-                        )? {
-                            result.extend(if self.pronunciation.dictionary_format == "ipa" {
-                                self.parse_ipa(&text)?
-                            } else {
-                                self.parse_output(&text)?
-                            });
-                            break;
-                        }
+                        )?
+                    {
+                        result.extend(if self.pronunciation.dictionary_format == "ipa" {
+                            self.parse_ipa(&text)?
+                        } else {
+                            self.parse_output(&text)?
+                        });
+                        break;
                     }
                     let provider: &dyn PronunciationProvider = match self.provider.as_str() {
                         "cmudict" => &CmuProvider,
@@ -546,14 +546,11 @@ impl ContextProfile {
                 }
                 let phone = if self.inventory.phone(token).is_none()
                     && token.len() > 1
-                    && token
-                        .as_bytes()
-                        .last()
-                        .is_some_and(|b| [b'0', b'1', b'2'].contains(b))
+                    && token.as_bytes().last().is_some_and(|b| b"012".contains(b))
                 {
                     let stem = &token[..token.len() - 1];
                     if self.inventory.phone(stem).is_some() {
-                        stress = Some((token.as_bytes()[token.len() - 1] - b'0') as u8);
+                        stress = Some(token.as_bytes()[token.len() - 1] - b'0');
                         stem
                     } else {
                         token
@@ -1233,7 +1230,10 @@ pub fn command(root: &Path, args: &[String]) -> Result<Vec<String>> {
             let value = argument(args, 3)?;
             match key {
                 "provider" => p.provider = value.into(),
-                "inventory" => p.inventory = locale::normalize(value)?,
+                "inventory" => {
+                    ensure!(identifier(value), "invalid inventory identifier");
+                    p.inventory = value.into();
+                }
                 "license" => p.license = value.into(),
                 "attribution" => p.attribution = value.into(),
                 "syllabification" => p.syllabification = value.into(),

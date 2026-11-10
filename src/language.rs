@@ -1,9 +1,15 @@
-use anyhow::{Result, bail, ensure};
+use anyhow::{Context, Result, bail, ensure};
 use serde::{Deserialize, Serialize};
 use std::collections::{BTreeMap, BTreeSet};
 
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Score {
+    #[serde(default)]
+    pub tempo_map: Vec<crate::timeline::Tempo>,
+    #[serde(default)]
+    pub meter_map: Vec<crate::timeline::Meter>,
+    #[serde(default)]
+    pub markers: BTreeMap<String, f64>,
     pub name: String,
     pub tempo: f64,
     pub signature: [u32; 2],
@@ -23,6 +29,9 @@ pub struct Score {
 impl Default for Score {
     fn default() -> Self {
         Self {
+            tempo_map: vec![],
+            meter_map: vec![],
+            markers: BTreeMap::new(),
             name: "Untitled".into(),
             tempo: 120.,
             signature: [4, 4],
@@ -56,6 +65,14 @@ pub struct Track {
     pub instrument: String,
     pub sequence: String,
     pub step: f64,
+    #[serde(default)]
+    pub mini: bool,
+    #[serde(default = "default_cycle")]
+    pub cycle_beats: f64,
+    #[serde(default = "default_cycles")]
+    pub cycles: u32,
+    #[serde(default)]
+    pub seed: u64,
     pub gain: f32,
     pub pan: f32,
     pub mute: bool,
@@ -63,6 +80,12 @@ pub struct Track {
     pub looping: bool,
     pub at: f64,
     pub clips: Vec<Clip>,
+    #[serde(default)]
+    pub selected_clip: Option<usize>,
+    #[serde(default)]
+    pub snap_grid: Option<f64>,
+    #[serde(skip)]
+    pub timeline_edits: Vec<(usize, String, Option<String>)>,
     pub effects: Vec<Effect>,
     pub voice: Option<String>,
     pub lyrics: String,
@@ -98,6 +121,12 @@ pub struct Track {
     #[serde(default)]
     pub provider: Option<String>,
 }
+fn default_cycle() -> f64 {
+    4.
+}
+fn default_cycles() -> u32 {
+    1
+}
 fn one() -> f32 {
     1.
 }
@@ -108,6 +137,10 @@ impl Track {
             instrument: "sine".into(),
             sequence: String::new(),
             step: 0.5,
+            mini: false,
+            cycle_beats: 4.,
+            cycles: 1,
+            seed: 0,
             gain: 1.,
             pan: 0.,
             mute: false,
@@ -115,6 +148,9 @@ impl Track {
             looping: false,
             at: 0.,
             clips: vec![],
+            selected_clip: None,
+            snap_grid: None,
+            timeline_edits: vec![],
             effects: vec![],
             voice: None,
             lyrics: String::new(),
@@ -145,8 +181,12 @@ impl Track {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Clip {
+    #[serde(default)]
+    pub id: String,
     pub path: String,
     pub at: f64,
+    #[serde(default)]
+    pub at_beat: Option<f64>,
     pub start: f64,
     pub end: Option<f64>,
     pub gain: f32,
@@ -163,8 +203,10 @@ pub struct Clip {
 impl Clip {
     pub fn new(path: String) -> Self {
         Self {
+            id: String::new(),
             path,
             at: 0.,
+            at_beat: None,
             start: 0.,
             end: None,
             gain: 1.,
@@ -187,8 +229,12 @@ pub struct Effect {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Automation {
+    #[serde(default)]
+    pub step: bool,
     pub parameter: String,
     pub points: Vec<[f64; 2]>,
+    #[serde(default)]
+    pub musical: Vec<Option<f64>>,
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
@@ -226,6 +272,27 @@ pub fn note(s: &str) -> Result<i32> {
         .ok_or_else(|| anyhow::anyhow!("note outside MIDI range: {s}"))?;
     ensure!((0..=127).contains(&n), "note outside MIDI range: {s}");
     Ok(n)
+}
+fn musical_at(value: &str, markers: &BTreeMap<String, f64>) -> Result<Option<f64>> {
+    if let Some(name) = value.strip_prefix('@') {
+        Ok(Some(*markers.get(name).with_context(|| {
+            format!("declare marker {name:?} before using it")
+        })?))
+    } else {
+        musical(value)
+    }
+}
+fn musical(value: &str) -> Result<Option<f64>> {
+    if let Some(value) = value.strip_suffix('b') {
+        let value: f64 = value.parse()?;
+        ensure!(
+            value.is_finite() && (0. ..=1e6).contains(&value),
+            "invalid beat position"
+        );
+        Ok(Some(value))
+    } else {
+        Ok(None)
+    }
 }
 pub fn seconds(s: &str, tempo: f64) -> Result<f64> {
     let v = if let Some(v) = s.strip_suffix("ms") {
@@ -383,6 +450,9 @@ pub fn parse(src: &str) -> Result<Score> {
     let mut vars = BTreeMap::<String, String>::new();
     let mut instruments = BTreeMap::<String, Track>::new();
     let mut section: Option<(String, f64)> = None;
+    let mut section_beat = None;
+    let mut section_repeat = (1usize, 0f64, 0usize);
+    let mut track_positions = vec![];
     let mut i = 0;
     while i < rows.len() {
         let v = &rows[i];
@@ -392,6 +462,46 @@ pub fn parse(src: &str) -> Result<Score> {
                 "inventory" => score.inventory = Some(crate::locale::normalize(arg(v, 1)?)?),
                 "provider" => score.provider = Some(arg(v, 1)?.into()),
                 "project" => score.name = arg(v, 1)?.into(),
+                "marker" => {
+                    ensure!(arg(v, 2)? == "at", "marker NAME at BEATb");
+                    let beat =
+                        musical(arg(v, 3)?)?.context("marker needs quarter-note beats (Nb)")?;
+                    ensure!(
+                        score.markers.len() < 1024
+                            && score.markers.insert(arg(v, 1)?.into(), beat).is_none(),
+                        "duplicate/too many markers"
+                    );
+                }
+                "tempo" if v.get(1).is_some_and(|x| x == "at" || x == "ramp") => {
+                    if arg(v, 1)? == "at" {
+                        score.tempo_map.push(crate::timeline::Tempo {
+                            beat: musical_at(arg(v, 2)?, &score.markers)?
+                                .context("tempo position needs Nb or @marker")?,
+                            bpm: arg(v, 3)?.parse()?,
+                            end: None,
+                            end_bpm: None,
+                        });
+                    } else {
+                        score.tempo_map.push(crate::timeline::Tempo {
+                            beat: musical_at(arg(v, 2)?, &score.markers)?
+                                .context("ramp needs Nb or @marker")?,
+                            end: Some(
+                                musical_at(arg(v, 3)?, &score.markers)?
+                                    .context("ramp needs Nb or @marker")?,
+                            ),
+                            bpm: arg(v, 4)?.parse()?,
+                            end_bpm: Some(arg(v, 5)?.parse()?),
+                        });
+                    }
+                }
+                "signature" if v.get(1).is_some_and(|x| x == "at") => {
+                    ensure!(arg(v, 2)? == "bar", "signature at bar NUMBER N/D");
+                    let (a, b) = arg(v, 4)?.split_once('/').context("signature needs N/D")?;
+                    score.meter_map.push(crate::timeline::Meter {
+                        bar: arg(v, 3)?.parse()?,
+                        signature: [a.parse()?, b.parse()?],
+                    });
+                }
                 "tempo" => {
                     score.tempo = number(v, 1)? as f64;
                     ensure!((20.0..=400.).contains(&score.tempo), "tempo range 20..400");
@@ -463,10 +573,62 @@ pub fn parse(src: &str) -> Result<Score> {
                         arg(v, 2)? == "at" && v.last().map(String::as_str) == Some("{"),
                         "section NAME at TIME {{ ... }}"
                     );
-                    section = Some((arg(v, 1)?.into(), seconds(arg(v, 3)?, score.tempo)?));
+                    section_repeat = if v.get(4).is_some_and(|x| x == "repeat") {
+                        ensure!(
+                            arg(v, 6)? == "every",
+                            "section NAME at TIME repeat COUNT every BEATSb"
+                        );
+                        let count: usize = arg(v, 5)?.parse()?;
+                        let step =
+                            musical(arg(v, 7)?)?.context("section repeat spacing needs Nb")?;
+                        ensure!(
+                            (1..=128).contains(&count) && step > 0.,
+                            "section repeat range 1..128, positive spacing"
+                        );
+                        (count, step, score.tracks.len())
+                    } else {
+                        (1, 0., score.tracks.len())
+                    };
+                    section_beat = musical_at(arg(v, 3)?, &score.markers)?;
+                    section = Some((
+                        arg(v, 1)?.into(),
+                        if let Some(beat) = section_beat {
+                            beat * 60. / score.tempo
+                        } else {
+                            seconds(arg(v, 3)?, score.tempo)?
+                        },
+                    ));
                 }
                 "}" => {
-                    ensure!(section.take().is_some(), "unexpected closing brace");
+                    let (name, _) = section.take().context("unexpected closing brace")?;
+                    let (count, spacing, first) = section_repeat;
+                    let originals = score.tracks[first..].to_vec();
+                    let positions = track_positions[first..].to_vec();
+                    ensure!(
+                        score.tracks.len() + originals.len() * (count - 1) <= 128,
+                        "section repetition exceeds track limit 128"
+                    );
+                    for repetition in 1..count {
+                        for (track, position) in originals.iter().zip(&positions) {
+                            let mut track = track.clone();
+                            track.name = format!(
+                                "{name}#{}/{}",
+                                repetition + 1,
+                                track
+                                    .name
+                                    .strip_prefix(&format!("{name}/"))
+                                    .unwrap_or(&track.name)
+                            );
+                            score.tracks.push(track);
+                            let (local, origin, seconds, shift) = *position;
+                            track_positions.push((
+                                local,
+                                origin,
+                                seconds,
+                                shift + spacing * repetition as f64,
+                            ));
+                        }
+                    }
                 }
                 "instrument" => {
                     ensure!(
@@ -497,8 +659,12 @@ pub fn parse(src: &str) -> Result<Score> {
                         "track requires block"
                     );
                     let mut t = Track::new(arg(v, 1)?.into());
+                    let mut local_beat = None;
                     i += 1;
                     while i < rows.len() && rows[i][0] != "}" {
+                        if rows[i][0] == "at" {
+                            local_beat = musical(arg(&rows[i], 1)?)?;
+                        }
                         parse_track(&rows[i], &mut t, &vars, &instruments, score.tempo)
                             .map_err(|e| anyhow::anyhow!("statement {}: {e}", i + 1))?;
                         i += 1;
@@ -513,6 +679,16 @@ pub fn parse(src: &str) -> Result<Score> {
                         "duplicate track {}",
                         t.name
                     );
+                    track_positions.push((
+                        local_beat,
+                        if section.is_some() {
+                            section_beat
+                        } else {
+                            None
+                        },
+                        section.as_ref().map_or(0., |x| x.1),
+                        0.,
+                    ));
                     score.tracks.push(t);
                 }
                 "master" => score.master.push(effect(&v[1..])?),
@@ -524,9 +700,137 @@ pub fn parse(src: &str) -> Result<Score> {
         i += 1;
     }
     ensure!(section.is_none(), "unclosed section");
+    let clock = score.clock()?;
+    for (track, (local_beat, origin_beat, origin_seconds, repeat_shift)) in
+        score.tracks.iter_mut().zip(track_positions)
+    {
+        let mapped = !score.tempo_map.is_empty() || !score.meter_map.is_empty();
+        let origin = origin_beat.map_or(origin_seconds, |b| clock.seconds(b));
+        let origin = clock.seconds(clock.beat(origin) + repeat_shift);
+        let old_local = track.at - origin_seconds;
+        if mapped || repeat_shift > 0. {
+            track.at = local_beat.map_or(origin + old_local, |b| {
+                clock.seconds(clock.beat(origin) + b)
+            });
+        }
+        if let Some(grid) = track.snap_grid {
+            track.at = clock.seconds((clock.beat(track.at) / grid).round() * grid);
+        }
+        let base = clock.beat(track.at);
+        for clip in &mut track.clips {
+            if let Some(beat) = clip.at_beat.filter(|_| mapped) {
+                clip.at =
+                    clock.seconds(base + beat) - track.at + (clip.at - beat * 60. / score.tempo);
+            }
+        }
+        if let Some(grid) = track.snap_grid {
+            for clip in &mut track.clips {
+                let relative = clock.beat(track.at + clip.at) - base;
+                clip.at = clock.seconds(base + (relative / grid).round() * grid) - track.at;
+            }
+        }
+        for (index, a, b) in std::mem::take(&mut track.timeline_edits) {
+            let position = |value: &str| -> Result<f64> {
+                if value.starts_with('@') || value.starts_with("bar:") {
+                    Ok(clock.parse(value, &score.markers)? - track.at)
+                } else if let Some(beat) = musical(value)? {
+                    Ok(clock.seconds(base + beat) - track.at)
+                } else {
+                    seconds(value, score.tempo)
+                }
+            };
+            let start = position(&a)?;
+            let end = b.as_deref().map(position).transpose()?;
+            let clip = track
+                .clips
+                .get_mut(index)
+                .context("timeline edit references a deleted clip")?;
+            ensure!(start >= clip.at, "timeline edit lies before clip start");
+            let source = clip.start + (start - clip.at) / clip.stretch;
+            if let Some(end) = end {
+                ensure!(end > start, "trim-at end must follow start");
+                let source_end = clip.start + (end - clip.at) / clip.stretch;
+                ensure!(
+                    clip.end.is_none_or(|limit| source_end <= limit + 1e-9),
+                    "trim-at exceeds clip end"
+                );
+                clip.start = source;
+                clip.end = Some(source_end);
+                clip.at = start;
+                clip.at_beat = None;
+            } else {
+                ensure!(
+                    source > clip.start && clip.end.is_none_or(|limit| source < limit),
+                    "split-at must lie inside clip"
+                );
+                let mut right = clip.clone();
+                right.id = format!("{}-right", clip.id);
+                right.start = source;
+                right.at = start;
+                right.at_beat = None;
+                right.fade_in = 0.;
+                clip.end = Some(source);
+                clip.fade_out = 0.;
+                track.clips.push(right);
+            }
+        }
+        for automation in &mut track.automation {
+            for (point, beat) in automation.points.iter_mut().zip(&automation.musical) {
+                if let Some(beat) = beat.filter(|_| mapped) {
+                    point[0] = clock.seconds(base + beat) - track.at;
+                }
+            }
+            ensure!(
+                automation.points.windows(2).all(|w| w[0][0] < w[1][0]),
+                "automation points conflict after tempo conversion"
+            );
+        }
+    }
     ensure!(score.duration() <= 3600., "arrangement exceeds one hour");
     for t in &score.tracks {
-        events(&t.sequence, t.step)?;
+        ensure!(
+            !t.automation.iter().any(|a| a.parameter == "filter")
+                || t.effects.iter().any(|e| e.kind == "filter"),
+            "track {:?}: filter automation needs a track filter effect",
+            t.name
+        );
+        for automation in &t.automation {
+            if let Some(target) = automation.parameter.strip_prefix("effect.") {
+                let (effect_index, parameter) = target
+                    .split_once('.')
+                    .context("effect automation uses effect.INDEX.ARG (one-based)")?;
+                let effect_index = effect_index
+                    .parse::<usize>()?
+                    .checked_sub(1)
+                    .context("effect index starts at 1")?;
+                let parameter = parameter
+                    .parse::<usize>()?
+                    .checked_sub(1)
+                    .context("argument index starts at 1")?;
+                let effect_spec = t
+                    .effects
+                    .get(effect_index)
+                    .context("unknown automated effect index")?;
+                ensure!(
+                    parameter < effect_spec.args.len()
+                        && !(effect_spec.kind == "delay" && parameter == 0),
+                    "unknown or allocation-changing effect argument (delay time cannot be automated)"
+                );
+                for point in &automation.points {
+                    let mut args = effect_spec.args.clone();
+                    args[parameter] = point[1] as f32;
+                    let mut tokens = vec![effect_spec.kind.clone()];
+                    tokens.extend(args.iter().map(ToString::to_string));
+                    effect(&tokens)?;
+                }
+            }
+        }
+        if t.mini {
+            crate::mini::Pattern::compile(&t.sequence)
+                .map_err(|e| anyhow::anyhow!("track {:?}: {e:#}", t.name))?;
+        } else {
+            events(&t.sequence, t.step)?;
+        }
         if let Some(v) = &t.voice {
             ensure!(score.voices.contains_key(v), "unknown voice {v}");
         }
@@ -537,9 +841,22 @@ impl Score {
     pub fn bar_beats(&self) -> f64 {
         self.signature[0] as f64 * 4. / self.signature[1] as f64
     }
-    pub fn duration(&self) -> f64 {
-        self.bars as f64 * self.bar_beats() * 60. / self.tempo
+    pub fn clock(&self) -> Result<crate::timeline::Clock> {
+        crate::timeline::Clock::new(self.tempo, self.signature, &self.tempo_map, &self.meter_map)
     }
+    pub fn duration(&self) -> f64 {
+        if self.tempo_map.is_empty() && self.meter_map.is_empty() {
+            self.bars as f64 * self.bar_beats() * 60. / self.tempo
+        } else {
+            self.clock()
+                .map(|c| c.seconds(c.bar_beat(self.bars + 1)))
+                .unwrap_or(f64::NAN)
+        }
+    }
+}
+fn selected_clip(t: &mut Track) -> Result<&mut Clip> {
+    let index = t.selected_clip.unwrap_or(t.clips.len().saturating_sub(1));
+    t.clips.get_mut(index).context("import/select a clip first")
 }
 fn parse_track(
     v: &[String],
@@ -564,6 +881,26 @@ fn parse_track(
         t.vocal_overrides.insert(v[0].clone());
     }
     match v[0].as_str() {
+        "notation" => {
+            t.mini = match arg(v, 1)? {
+                "mini" => true,
+                "legacy" => false,
+                _ => bail!("notation mini|legacy"),
+            };
+        }
+        "cycle" => {
+            let n: f64 = arg(v, 1)?.parse()?;
+            ensure!(
+                n.is_finite() && (0.0625..=256.).contains(&n),
+                "cycle range 1/16..256 beats"
+            );
+            t.cycle_beats = n;
+        }
+        "cycles" => {
+            t.cycles = arg(v, 1)?.parse()?;
+            ensure!((1..=65536).contains(&t.cycles), "cycles range 1..65536");
+        }
+        "seed" => t.seed = arg(v, 1)?.parse()?,
         "language" => t.language = Some(crate::locale::normalize(arg(v, 1)?)?),
         "inventory" => t.inventory = Some(crate::locale::normalize(arg(v, 1)?)?),
         "provider" => t.provider = Some(arg(v, 1)?.into()),
@@ -608,8 +945,12 @@ fn parse_track(
         "drum" => {
             let name = arg(v, 1)?;
             ensure!(
-                ["kick", "snare", "hat", "clap"].contains(&name),
-                "drum name kick|snare|hat|clap"
+                !name.is_empty()
+                    && name.len() <= 128
+                    && name
+                        .chars()
+                        .all(|c| c.is_alphanumeric() || c == '_' || c == '-'),
+                "drum needs a local sample identifier"
             );
             t.drums.insert(name.into(), arg(v, 2)?.into());
         }
@@ -663,46 +1004,110 @@ fn parse_track(
         }
         "import" | "sample" => {
             ensure!(t.clips.len() < 1024, "clip limit");
-            t.clips.push(Clip::new(arg(v, 1)?.into()));
+            let mut clip = Clip::new(arg(v, 1)?.into());
+            clip.id = format!("clip-{}", t.clips.len() + 1);
+            t.clips.push(clip);
+            t.selected_clip = Some(t.clips.len() - 1);
             if v[0] == "sample" {
                 t.instrument = "sample".into();
             }
         }
-        "trim" | "crop" => {
-            let c = t
+        "split-at" | "trim-at" => {
+            let index = t.selected_clip.unwrap_or(t.clips.len().saturating_sub(1));
+            ensure!(index < t.clips.len(), "select a clip first");
+            t.timeline_edits.push((
+                index,
+                arg(v, 1)?.into(),
+                if v[0] == "trim-at" {
+                    Some(arg(v, 2)?.into())
+                } else {
+                    None
+                },
+            ));
+        }
+        "group-duplicate" => {
+            let name = arg(v, 1)?;
+            let shift = seconds(arg(v, 2)?, tempo)?;
+            let copies: Vec<_> = t
                 .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("import a clip first"))?;
+                .iter()
+                .filter(|c| c.group == name)
+                .cloned()
+                .collect();
+            ensure!(
+                !copies.is_empty() && copies.len() + t.clips.len() <= 1024,
+                "unknown group or clip limit exceeded"
+            );
+            for mut clip in copies {
+                clip.id = format!("{}-copy-{}", clip.id, t.clips.len() + 1);
+                clip.at += shift;
+                t.clips.push(clip);
+            }
+        }
+        "snap" => {
+            t.snap_grid = if arg(v, 1)? == "off" {
+                None
+            } else {
+                let grid = musical(arg(v, 1)?)?.context("snap GRIDb|off")?;
+                ensure!(grid > 0. && grid <= 64., "snap range (0,64] beats");
+                Some(grid)
+            };
+        }
+        "select-clip" => {
+            let id = arg(v, 1)?;
+            t.selected_clip = Some(
+                t.clips
+                    .iter()
+                    .position(|c| c.id == id)
+                    .or_else(|| {
+                        id.parse::<usize>()
+                            .ok()
+                            .and_then(|n| n.checked_sub(1))
+                            .filter(|i| *i < t.clips.len())
+                    })
+                    .context("unknown clip ID/index")?,
+            );
+        }
+        "clip-id" => {
+            let id = arg(v, 1)?;
+            ensure!(
+                !id.is_empty() && !t.clips.iter().any(|c| c.id == id),
+                "duplicate/empty clip ID"
+            );
+            selected_clip(t)?.id = id.into();
+        }
+        "relink" => selected_clip(t)?.path = arg(v, 1)?.into(),
+        "group-move" => {
+            let name = arg(v, 1)?;
+            let offset = seconds(arg(v, 2)?, tempo)?;
+            ensure!(
+                t.clips.iter().any(|c| c.group == name),
+                "unknown clip group"
+            );
+            for clip in t.clips.iter_mut().filter(|c| c.group == name) {
+                clip.at += offset;
+            }
+        }
+        "trim" | "crop" => {
+            let c = selected_clip(t)?;
             c.start = seconds(arg(v, 1)?, tempo)?;
             c.end = Some(seconds(arg(v, 2)?, tempo)?);
             ensure!(c.end.unwrap() > c.start, "trim end must follow start");
         }
         "place" | "move" => {
-            let c = t
-                .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("import a clip first"))?;
-            c.at = seconds(arg(v, if arg(v, 1)? == "at" { 2 } else { 1 })?, tempo)?;
+            let c = selected_clip(t)?;
+            let value = arg(v, if arg(v, 1)? == "at" { 2 } else { 1 })?;
+            c.at = seconds(value, tempo)?;
+            c.at_beat = musical(value)?;
         }
-        "clip-gain" => {
-            t.clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?
-                .gain = gain(arg(v, 1)?)?
-        }
+        "clip-gain" => selected_clip(t)?.gain = gain(arg(v, 1)?)?,
         "clip-pan" => {
             let p = number(v, 1)?;
             ensure!(p.abs() <= 1., "pan range -1..1");
-            t.clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?
-                .pan = p;
+            selected_clip(t)?.pan = p;
         }
         "fade" => {
-            let c = t
-                .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?;
+            let c = selected_clip(t)?;
             let time = seconds(arg(v, 2)?, tempo)?;
             match arg(v, 1)? {
                 "in" => c.fade_in = time,
@@ -711,10 +1116,7 @@ fn parse_track(
             }
         }
         "reverse" | "normalize" => {
-            let c = t
-                .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?;
+            let c = selected_clip(t)?;
             if v[0] == "reverse" {
                 c.reverse = !c.reverse
             } else {
@@ -723,10 +1125,7 @@ fn parse_track(
         }
         "stretch" | "pitch" => {
             let value = number(v, 1)?;
-            let c = t
-                .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?;
+            let c = selected_clip(t)?;
             if v[0] == "stretch" {
                 ensure!((0.25..=4.).contains(&value), "stretch range .25..4");
                 c.stretch = value as f64
@@ -735,36 +1134,31 @@ fn parse_track(
                 c.pitch = value;
             }
         }
-        "group" => {
-            t.clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?
-                .group = arg(v, 1)?.into()
-        }
+        "group" => selected_clip(t)?.group = arg(v, 1)?.into(),
         "duplicate" => {
             ensure!(t.clips.len() < 1024, "clip limit");
-            let mut c = t
-                .clips
-                .last()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?
-                .clone();
+            let mut c = selected_clip(t)?.clone();
+            c.id = format!("clip-{}", t.clips.len() + 1);
             c.at = seconds(arg(v, 1)?, tempo)?;
+            c.at_beat = musical(arg(v, 1)?)?;
             t.clips.push(c);
+            t.selected_clip = Some(t.clips.len() - 1);
         }
         "delete" => {
-            ensure!(t.clips.pop().is_some(), "no clip");
+            let i = t.selected_clip.unwrap_or(t.clips.len().saturating_sub(1));
+            ensure!(i < t.clips.len(), "no selected clip");
+            t.clips.remove(i);
+            t.selected_clip = None;
         }
         "split" => {
             let time = seconds(arg(v, 1)?, tempo)?;
-            let c = t
-                .clips
-                .last_mut()
-                .ok_or_else(|| anyhow::anyhow!("no clip"))?;
+            let c = selected_clip(t)?;
             ensure!(
                 time > c.start && c.end.is_some_and(|end| time < end),
                 "split needs explicit trim containing time"
             );
             let mut right = c.clone();
+            right.id = format!("{}-split", c.id);
             right.start = time;
             right.at += (time - c.start) * c.stretch;
             c.end = Some(time);
@@ -818,10 +1212,23 @@ fn parse_track(
         "automate" => {
             let p = arg(v, 1)?;
             ensure!(
-                ["gain", "pan", "bend"].contains(&p),
-                "automate gain|pan|bend"
+                [
+                    "gain",
+                    "pan",
+                    "bend",
+                    "filter",
+                    "formant",
+                    "dynamics",
+                    "vibrato",
+                    "breathiness",
+                    "vocal-pitch"
+                ]
+                .contains(&p)
+                    || p.starts_with("effect."),
+                "automate gain|pan|bend|filter"
             );
             let mut points = vec![];
+            let mut musical_points = vec![];
             for point in arg(v, 2)?.split_whitespace() {
                 let (a, b) = point
                     .split_once('=')
@@ -833,28 +1240,33 @@ fn parse_track(
                         && match p {
                             "gain" => (0.0..=4.).contains(&val),
                             "pan" => (-1.0..=1.).contains(&val),
+                            "filter" => (20.0..=20000.).contains(&val),
+                            "formant" => (0.5..=2.).contains(&val),
+                            "dynamics" => (0. ..=2.).contains(&val),
+                            "vibrato" | "breathiness" => (0. ..=1.).contains(&val),
+                            value if value.starts_with("effect.") => true,
                             _ => (-24.0..=24.).contains(&val),
                         },
                     "invalid automation value"
                 );
-                ensure!(
-                    points.last().is_none_or(|p: &[f64; 2]| time > p[0]),
-                    "automation times must increase"
-                );
+
                 points.push([time, val]);
+                musical_points.push(musical(a)?);
             }
             ensure!(!points.is_empty(), "empty automation");
+            let interpolation = v.get(3).map(String::as_str).unwrap_or("linear");
+            ensure!(
+                ["linear", "step"].contains(&interpolation),
+                "automation interpolation linear|step"
+            );
             t.automation.push(Automation {
+                step: interpolation == "step",
                 parameter: p.into(),
                 points,
+                musical: musical_points,
             });
         }
-        "clip-effect" => t
-            .clips
-            .last_mut()
-            .ok_or_else(|| anyhow::anyhow!("no clip"))?
-            .effects
-            .push(effect(&v[1..])?),
+        "clip-effect" => selected_clip(t)?.effects.push(effect(&v[1..])?),
         _ => t.effects.push(effect(v)?),
     }
     Ok(())

@@ -115,8 +115,9 @@ spellings absent from a pack require a dictionary entry or manual phonemes.
 See [research and design decisions](LANGUAGE_RESEARCH.md) for provider alternatives
 and the limits of punctuation handling.
 
-This multilingual/procedural increment has not been built or tested under the
-current operator-only instructions. No human banks or listening fixtures were
+The multilingual/procedural regression tests now pass in the Linux development
+workspace; the later mini-notation pass repaired the Latin inventory identifier
+validation. No human banks, listening fixtures or physical-device validation were
 available. From the repository root, with the Rust toolchain and platform prerequisites
 in [platform support](PLATFORMS.md) installed, run:
 

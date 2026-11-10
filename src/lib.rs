@@ -18,3 +18,13 @@ pub mod phonetics;
 pub mod procedural;
 
 pub mod lexicon;
+
+pub mod mini;
+
+pub mod export;
+
+pub mod timeline;
+
+pub mod recording;
+
+pub mod storage;

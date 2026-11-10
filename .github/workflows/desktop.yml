@@ -50,7 +50,7 @@ jobs:
           Copy-Item target/release/songbird.exe, config.example.toml, README.md, LICENSE $bundle
           Copy-Item docs, resources -Destination $bundle -Recurse
           New-Item -ItemType Directory -Path (Join-Path $bundle 'examples'), (Join-Path $bundle 'data') | Out-Null
-          Copy-Item examples/acceptance, examples/songwriting, examples/voicebank-studio (Join-Path $bundle 'examples') -Recurse
+          Copy-Item examples/acceptance, examples/songwriting, examples/voicebank-studio, examples/mini-session (Join-Path $bundle 'examples') -Recurse
           Copy-Item data/CMUDICT-LICENSE, data/README.md, data/cmudict.dict (Join-Path $bundle 'data')
           Copy-Item packaging/Start-Songbird.cmd $bundle
       - name: Upload Windows package
@@ -73,7 +73,7 @@ jobs:
           cp packaging/macos/Info.plist "$bundle/Songbird.app/Contents/Info.plist"
           cp README.md LICENSE config.example.toml "$bundle/"
           cp -R docs resources "$bundle/"
-          cp -R examples/acceptance examples/songwriting examples/voicebank-studio "$bundle/examples/"
+          cp -R examples/acceptance examples/songwriting examples/voicebank-studio examples/mini-session "$bundle/examples/"
           cp data/CMUDICT-LICENSE data/README.md data/cmudict.dict "$bundle/data/"
           plutil -lint "$bundle/Songbird.app/Contents/Info.plist"
           tar -czf "$RUNNER_TEMP/songbird-macos.tar.gz" -C "$bundle" .

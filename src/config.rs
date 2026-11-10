@@ -17,6 +17,8 @@ pub struct Config {
     pub theme: Theme,
     pub language: crate::locale::Preferences,
     pub voicebank: crate::locale::BankPreferences,
+    pub recording: crate::recording::Settings,
+    pub storage: crate::storage::Limits,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -26,6 +28,8 @@ impl Default for Config {
             theme: Theme::default(),
             language: Default::default(),
             voicebank: Default::default(),
+            recording: Default::default(),
+            storage: Default::default(),
         }
     }
 }
@@ -112,6 +116,19 @@ impl Config {
             config.version == 1,
             "unsupported config version {}",
             config.version
+        );
+        ensure!(
+            config.recording.latency_ms.is_finite()
+                && config.recording.latency_ms.abs() <= 2000.
+                && config.recording.count_in_bars <= 8
+                && config.recording.pre_roll_bars <= 8,
+            "recording latency range +/-2000 ms; count-in/pre-roll maximum 8 bars"
+        );
+        ensure!(
+            config.storage.cache_bytes >= 1048576
+                && config.storage.cache_bytes <= 1024 * 1024 * 1024 * 1024
+                && config.storage.minimum_free_bytes <= 1024 * 1024 * 1024 * 1024,
+            "invalid storage limits"
         );
         let a = &config.appearance;
         ensure!(

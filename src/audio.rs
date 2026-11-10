@@ -20,8 +20,16 @@ pub struct Meters {
     pub clipped: AtomicU64,
     pub device_error: AtomicBool,
     pub stopped: AtomicBool,
+    pub paused: AtomicBool,
+    pub loop_start: AtomicU64,
+    pub loop_end: AtomicU64,
+    pub count_in: AtomicU64,
+    pub loop_count: AtomicU64,
+    pub loop_missed: AtomicBool,
+    pub track_peaks: [[AtomicU32; 32]; 4],
     pub drained: AtomicBool,
     pub edit_missed: AtomicBool,
+    pub edit_frame: AtomicU64,
     pub finished: AtomicBool,
 }
 impl Meters {
@@ -99,6 +107,36 @@ fn config(
     .with_sample_rate(cpal::SampleRate(rate));
     Ok((c.config(), c.sample_format()))
 }
+fn queued_frame(rx: &mut rtrb::Consumer<[f32; 2]>, state: &Meters, missed: &mut bool) -> [f32; 2] {
+    if state.stopped.load(Ordering::Relaxed) || state.paused.load(Ordering::Relaxed) {
+        return [0.; 2];
+    }
+    match rx.pop() {
+        Ok(x) => {
+            if state.count_in.load(Ordering::Relaxed) > 0 {
+                state.count_in.fetch_sub(1, Ordering::Relaxed);
+            } else {
+                let next = state.frames.fetch_add(1, Ordering::Relaxed) + 1;
+                let end = state.loop_end.load(Ordering::Relaxed);
+                if end > 0 && next >= end {
+                    state.loop_count.fetch_add(1, Ordering::Relaxed);
+                    state
+                        .frames
+                        .store(state.loop_start.load(Ordering::Relaxed), Ordering::Relaxed);
+                }
+            }
+            x
+        }
+        Err(_) => {
+            if state.finished.load(Ordering::Relaxed) {
+                state.drained.store(true, Ordering::Relaxed);
+            } else {
+                *missed = true;
+            }
+            [0.; 2]
+        }
+    }
+}
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
     d: &cpal::Device,
     c: &cpal::StreamConfig,
@@ -112,24 +150,7 @@ fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
         move |data: &mut [T], _| {
             let mut missed = false;
             for out in data.chunks_mut(channels) {
-                let x = if state.stopped.load(Ordering::Relaxed) {
-                    [0.; 2]
-                } else {
-                    match rx.pop() {
-                        Ok(x) => {
-                            state.frames.fetch_add(1, Ordering::Relaxed);
-                            x
-                        }
-                        Err(_) => {
-                            if !state.finished.load(Ordering::Relaxed) {
-                                missed = true;
-                            } else {
-                                state.drained.store(true, Ordering::Relaxed);
-                            }
-                            [0.; 2]
-                        }
-                    }
-                };
+                let x = queued_frame(&mut rx, &state, &mut missed);
                 state.update(x);
                 for (ch, v) in out.iter_mut().enumerate() {
                     let x = if channels == 1 {
@@ -172,6 +193,7 @@ pub struct LiveContext {
     pub state: Arc<Meters>,
     pub bar: u64,
     pub rate: u32,
+    pub clock: Option<crate::timeline::Clock>,
 }
 impl LiveContext {
     pub fn preroll(&self, next: &mut Renderer) -> Result<()> {
@@ -186,7 +208,10 @@ impl LiveContext {
                 "playback stopped during live evaluation"
             );
             let ahead = self.state.frames.load(Ordering::Relaxed) + 16384 + self.bar;
-            let target = ahead.div_ceil(self.bar) * self.bar;
+            let target = self.clock.as_ref().map_or_else(
+                || ahead.div_ceil(self.bar) * self.bar,
+                |clock| clock.next_bar_frame(ahead, self.rate),
+            );
             ensure!(
                 target < next.length,
                 "new arrangement ends before live boundary; stop and play it"
@@ -206,6 +231,8 @@ pub struct Playback {
     replace: SyncSender<Renderer>,
     pub rate: u32,
     pub bar: u64,
+    clock: crate::timeline::Clock,
+    pending_clock: Option<(u64, crate::timeline::Clock)>,
 }
 impl Playback {
     pub fn start(mut renderer: Renderer, name: Option<&str>) -> Result<Self> {
@@ -215,7 +242,20 @@ impl Playback {
         let (c, format) = config(&d, false, rate, None)?;
         let (mut tx, rx) = rtrb::RingBuffer::new(16384);
         let state = Arc::new(Meters::default());
+        state.frames.store(renderer.position, Ordering::Relaxed);
+        state
+            .count_in
+            .store(renderer.count_in_frames, Ordering::Relaxed);
+        state.loop_start.store(
+            renderer.loop_start.unwrap_or(renderer.position),
+            Ordering::Relaxed,
+        );
+        state
+            .loop_end
+            .store(renderer.loop_end.unwrap_or(0), Ordering::Relaxed);
+        let clock = renderer.clock.clone();
         let mut block = [[0.; 2]; 1024];
+        let mut last_sent = [0.; 2];
         for _ in 0..4 {
             let n = renderer.block(&mut block)?;
             for x in &block[..n] {
@@ -248,14 +288,23 @@ impl Playback {
                         .is_some_and(|next: &Renderer| next.position == renderer.position)
                     {
                         renderer = pending.take().unwrap();
+                        s.edit_frame.store(renderer.position, Ordering::Release);
+                        renderer.fade_from(last_sent);
                     }
                     let boundary = renderer.bar_frames().max(1);
-                    let n = ((boundary - renderer.position % boundary).min(1024)) as usize;
+                    let mut n = ((boundary - renderer.position % boundary).min(1024)) as usize;
+                    if let Some(next) = &pending {
+                        n = n.min(next.position.saturating_sub(renderer.position) as usize);
+                    }
                     let n = renderer.block(&mut block[..n])?;
                     if n == 0 {
                         break;
                     }
+                    for (i, peak) in renderer.channel_peaks.iter().enumerate().take(128) {
+                        s.track_peaks[i / 32][i % 32].fetch_max(peak.to_bits(), Ordering::Relaxed);
+                    }
                     for x in &block[..n] {
+                        last_sent = *x;
                         while tx.is_full() {
                             if s.stopped.load(Ordering::Relaxed) {
                                 return Ok(());
@@ -286,6 +335,8 @@ impl Playback {
             replace,
             rate,
             bar,
+            clock,
+            pending_clock: None,
         })
     }
     pub fn live_context(&self) -> LiveContext {
@@ -293,16 +344,68 @@ impl Playback {
             state: self.state.clone(),
             bar: self.bar,
             rate: self.rate,
+            clock: Some(self.clock().clone()),
         }
     }
-    pub fn replace(&self, renderer: Renderer) -> Result<()> {
+    pub fn clock(&self) -> &crate::timeline::Clock {
+        if let Some((frame, clock)) = &self.pending_clock
+            && self.state.frames.load(Ordering::Relaxed) >= *frame
+            && self.state.edit_frame.load(Ordering::Acquire) == *frame
+        {
+            clock
+        } else {
+            &self.clock
+        }
+    }
+    pub fn clear_missed_clock(&mut self) {
+        if self
+            .pending_clock
+            .as_ref()
+            .is_some_and(|(frame, _)| self.state.edit_frame.load(Ordering::Acquire) != *frame)
+        {
+            self.pending_clock = None;
+        }
+    }
+    pub fn replace(&mut self, renderer: Renderer) -> Result<()> {
+        if let Some((frame, _)) = &self.pending_clock {
+            ensure!(
+                self.state.frames.load(Ordering::Relaxed) >= *frame
+                    && self.state.edit_frame.load(Ordering::Acquire) == *frame,
+                "wait for the queued live edit to reach its audible boundary"
+            );
+            self.clock = self.pending_clock.take().unwrap().1;
+        }
         ensure!(
             renderer.score.rate == self.rate,
             "stop playback before changing sample rate"
         );
+        ensure!(
+            self.state.loop_end.load(Ordering::Relaxed) == 0,
+            "pause/stop transport looping before applying a live edit"
+        );
+        let metadata = (renderer.position, renderer.clock.clone());
         self.replace
             .try_send(renderer)
-            .map_err(|_| anyhow::anyhow!("a live edit is already queued"))
+            .map_err(|_| anyhow::anyhow!("a live edit is already queued"))?;
+        self.pending_clock = Some(metadata);
+        Ok(())
+    }
+    /// Freeze queue consumption and the audible frame clock; keep prepared DSP state.
+    pub fn pause(&self) -> Result<()> {
+        ensure!(
+            !self.state.stopped.load(Ordering::Relaxed),
+            "playback is stopped"
+        );
+        self.state.paused.store(true, Ordering::Relaxed);
+        Ok(())
+    }
+    pub fn resume(&self) -> Result<()> {
+        ensure!(
+            !self.state.stopped.load(Ordering::Relaxed),
+            "playback is stopped"
+        );
+        self.state.paused.store(false, Ordering::Relaxed);
+        Ok(())
     }
     pub fn stop(&mut self) -> Result<()> {
         self.state.stopped.store(true, Ordering::Relaxed);
@@ -325,12 +428,16 @@ fn input<T: cpal::SizedSample + cpal::Sample>(
     mut tx: rtrb::Producer<[f32; 2]>,
     mut monitor: Option<rtrb::Producer<[f32; 2]>>,
     s: Arc<Meters>,
+    gate: Option<crate::recording::Gate>,
 ) -> Result<cpal::Stream>
 where
     f32: cpal::FromSample<T>,
 {
     let ch = c.channels as usize;
     let err = s.clone();
+    let mut last_loop = gate
+        .as_ref()
+        .map_or(0, |g| g.transport.loop_count.load(Ordering::Relaxed));
     Ok(d.build_input_stream(
         c,
         move |data: &[T], _| {
@@ -343,12 +450,42 @@ where
                     frame[ch - 1].to_sample::<f32>(),
                 ];
                 s.update(x);
+                if let Some(m) = &mut monitor {
+                    let _ = m.push(x);
+                }
+                if let Some(gate) = &gate {
+                    if gate.looping {
+                        let lap = gate.transport.loop_count.load(Ordering::Relaxed);
+                        if lap != last_loop {
+                            if lap > last_loop + 1 {
+                                s.loop_missed.store(true, Ordering::Relaxed);
+                                s.stopped.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            let index = gate.spans.count.load(Ordering::Relaxed) as usize + 1;
+                            if let Some(slot) = gate.spans.frames.get(index) {
+                                slot.store(s.frames.load(Ordering::Relaxed), Ordering::Relaxed);
+                                gate.spans.count.store(index as u64, Ordering::Release);
+                            } else {
+                                s.dropped.fetch_add(1, Ordering::Relaxed);
+                                s.stopped.store(true, Ordering::Relaxed);
+                                break;
+                            }
+                            last_loop = lap;
+                        }
+                    }
+                    match gate.status() {
+                        -1 => continue,
+                        1 => {
+                            s.stopped.store(true, Ordering::Relaxed);
+                            break;
+                        }
+                        _ => {}
+                    }
+                }
                 s.frames.fetch_add(1, Ordering::Relaxed);
                 if tx.push(x).is_err() {
                     s.dropped.fetch_add(1, Ordering::Relaxed);
-                }
-                if let Some(m) = &mut monitor {
-                    let _ = m.push(x);
                 }
             }
         },
@@ -383,6 +520,7 @@ pub struct RecordingConfig<'a> {
     pub input_name: Option<&'a str>,
     pub output_name: Option<&'a str>,
     pub monitoring: bool,
+    pub gate: Option<&'a crate::recording::Gate>,
 }
 impl Recording {
     pub fn start(root: &Path, settings: &RecordingConfig<'_>) -> Result<Self> {
@@ -395,11 +533,17 @@ impl Recording {
             input_name,
             output_name,
             monitoring,
+            gate,
         } = *settings;
         ensure!(
             ["wav", "flac"].contains(&format),
             "record format must be wav or flac"
         );
+        crate::storage::preflight(
+            &root.join("recordings"),
+            rate as u64 * channels as u64 * 3 * 5,
+            crate::phonetics::app_config().storage.minimum_free_bytes,
+        )?;
         let take = codec::unique(&root.join("recordings"), name, "wav")?;
         let encoder = codec::Encoder::create(&take, rate, channels, bits)?;
         let d = device(true, input_name)?;
@@ -416,23 +560,48 @@ impl Recording {
             (None, None)
         };
         let stream = match f {
-            cpal::SampleFormat::F32 => input::<f32>(&d, &c, tx, monitor_tx, state.clone())?,
-            cpal::SampleFormat::I16 => input::<i16>(&d, &c, tx, monitor_tx, state.clone())?,
-            cpal::SampleFormat::U16 => input::<u16>(&d, &c, tx, monitor_tx, state.clone())?,
-            cpal::SampleFormat::I32 => input::<i32>(&d, &c, tx, monitor_tx, state.clone())?,
-            cpal::SampleFormat::F64 => input::<f64>(&d, &c, tx, monitor_tx, state.clone())?,
+            cpal::SampleFormat::F32 => {
+                input::<f32>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
+            }
+            cpal::SampleFormat::I16 => {
+                input::<i16>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
+            }
+            cpal::SampleFormat::U16 => {
+                input::<u16>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
+            }
+            cpal::SampleFormat::I32 => {
+                input::<i32>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
+            }
+            cpal::SampleFormat::F64 => {
+                input::<f64>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
+            }
             _ => bail!("unsupported input sample format {f}"),
         };
         let s = state.clone();
         let path = take.clone();
         let final_flac = format == "flac";
         let root = root.to_path_buf();
+        let capture_gate = gate.cloned();
         let worker = thread::spawn(move || -> Result<PathBuf> {
             let _done = RecordingDone(s.clone());
             let mut encoder = encoder;
             let result = (|| -> Result<()> {
                 let mut block = Vec::with_capacity(1024);
+                let mut disk_check = rate as u64 * 5;
                 loop {
+                    let frames = s.frames.load(Ordering::Relaxed);
+                    ensure!(
+                        frames <= rate as u64 * 3600,
+                        "recording exceeds one-hour limit; original WAV preserved"
+                    );
+                    if frames >= disk_check {
+                        crate::storage::preflight(
+                            &root,
+                            rate as u64 * channels as u64 * 3 * 5,
+                            crate::phonetics::app_config().storage.minimum_free_bytes,
+                        )?;
+                        disk_check = frames + rate as u64 * 5;
+                    }
                     while let Ok(frame) = rx.pop() {
                         block.push(frame);
                         if block.len() == 1024 {
@@ -452,6 +621,10 @@ impl Recording {
             result?;
             finalized?;
             ensure!(
+                !s.loop_missed.load(Ordering::Relaxed),
+                "input callback missed loop boundaries; original WAV preserved; use a longer recording loop or smaller hardware buffer"
+            );
+            ensure!(
                 s.dropped.load(Ordering::Relaxed) == 0,
                 "recording buffer overrun; incomplete take preserved at {}",
                 path.display()
@@ -465,6 +638,11 @@ impl Recording {
                 s.frames.load(Ordering::Relaxed) > 0,
                 "no input received; empty take preserved"
             );
+            if let Some(gate) = &capture_gate
+                && gate.looping
+            {
+                gate.save_spans(&path, s.frames.load(Ordering::Relaxed), rate)?;
+            }
             if final_flac {
                 let output = path.with_extension("flac");
                 codec::convert(&path, &output, &root.join("cache"), rate, bits)?;
@@ -482,6 +660,13 @@ impl Recording {
         };
         if let Some(m) = &recording.monitor {
             m.play()?;
+        }
+        if let Some(gate) = gate {
+            ensure!(
+                gate.transport.count_in.load(Ordering::Relaxed) > 0
+                    || gate.transport.frames.load(Ordering::Relaxed) <= gate.start,
+                "input device armed after punch-in; increase count-in or pre-roll and retry (take file preserved)"
+            );
         }
         if let Err(e) = recording.stream.as_ref().unwrap().play() {
             recording.state.stopped.store(true, Ordering::Relaxed);
@@ -504,5 +689,31 @@ impl Drop for Recording {
         if let Some(w) = self.worker.take() {
             let _ = w.join();
         }
+    }
+}
+
+#[cfg(test)]
+mod transport_tests {
+    use super::*;
+    #[test]
+    fn pause_preserves_queued_pcm_and_clock_until_resume() {
+        let (mut tx, mut rx) = rtrb::RingBuffer::new(4);
+        tx.push([0.1, 0.2]).unwrap();
+        tx.push([0.3, 0.4]).unwrap();
+        let state = Meters::default();
+        let mut missed = false;
+        state.paused.store(true, Ordering::Relaxed);
+        state.finished.store(true, Ordering::Relaxed);
+        for _ in 0..20 {
+            assert_eq!(queued_frame(&mut rx, &state, &mut missed), [0.; 2]);
+        }
+        assert_eq!(state.frames.load(Ordering::Relaxed), 0);
+        assert!(!missed && !state.drained.load(Ordering::Relaxed));
+        state.paused.store(false, Ordering::Relaxed);
+        assert_eq!(queued_frame(&mut rx, &state, &mut missed), [0.1, 0.2]);
+        assert_eq!(queued_frame(&mut rx, &state, &mut missed), [0.3, 0.4]);
+        assert_eq!(state.frames.load(Ordering::Relaxed), 2);
+        queued_frame(&mut rx, &state, &mut missed);
+        assert!(state.drained.load(Ordering::Relaxed));
     }
 }

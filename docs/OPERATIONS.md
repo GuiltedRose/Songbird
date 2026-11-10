@@ -248,3 +248,9 @@ pitch stability, consonants and transition artifacts. Repeat across intended
 registers/styles and device rates. Do not use the generated example as a substitute
 for these checks. Interrupted recordings remain in the bank's recordings folder;
 capture receipts retain their target/profile/path for recovery and manual import.
+
+## Mini-notation and export additions
+
+See [mini-notation](MINI_NOTATION.md) for the opt-in syntax, migration and a generated
+example session. See [DAW delivery status](DAW_EXPANSION.md) for pause/resume, region
+and stem commands, validation/rollback, and documented hardware/resource limits.

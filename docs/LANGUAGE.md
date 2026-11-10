@@ -51,9 +51,8 @@ section chorus at 16b {
 master limit -1
 ```
 
-Global tempo/signature settings describe the entire evaluated arrangement. Live
-evaluation may change them at a prepared bar boundary. This grammar does **not**
-provide tempo maps within a single arrangement. Sections add an absolute offset
+Initial tempo/signature settings can be extended with tempo/meter maps; see
+[TIMELINE.md](TIMELINE.md). Live evaluation applies prepared changes at a bar boundary. Sections add an absolute offset
 to their tracks and qualify names (`verse/bass`). They cannot nest. `bars` sets
 the exact export end; include extra bars to capture effect tails. Sections beyond
 that end are intentionally outside the render range.
@@ -65,8 +64,8 @@ Each track name must be unique within its section.
 
 Times: seconds (`1.25` or `1.25s`), `250ms`, `00:08.250`, `01:02:03.5`,
 or quarter-note beats (`8b`). `at` positions a track; `place at` positions the
-most recently imported clip relative to the track. Signature affects bar length;
-a quarter-note beat always has duration `60/tempo` seconds.
+selected clip relative to the track. Signature affects bar length; tempo maps
+integrate quarter-note durations into elapsed seconds.
 
 ## Instruments and tracks
 
@@ -255,3 +254,18 @@ track greeting { use voice latin; notes "C4:1 D4:1"; lyrics "salve" }
 Punctuation records phrase marks, without allocating notes or adding pauses.
 Write rests explicitly. See [language packs](LANGUAGES.md) and
 [provider/phrasing research](LANGUAGE_RESEARCH.md).
+
+## Mini-notation and interpolation
+
+`notation mini`, `cycle BEATS`, `cycles COUNT` and `seed INTEGER` opt a track into
+the [mini frontend](MINI_NOTATION.md). Legacy notation stays the default.
+`automate PARAM "TIME=VALUE ..." [linear|step]` accepts gain, pan, bend and filter;
+filter requires a track filter effect. See [export and transport additions](DAW_EXPANSION.md).
+
+## Musical maps and timeline edits
+
+Tempo/meter maps, markers and repeated sections use the syntax in
+[TIMELINE.md](TIMELINE.md). Clip selection, musical splitting/trimming, snap and
+effect/vocal automation are documented in [EDITING.md](EDITING.md). Recorded-source
+trim coordinates remain independent of musical time. Transport and punch/loop
+recording commands are in [RECORDING.md](RECORDING.md).

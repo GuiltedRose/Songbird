@@ -49,7 +49,9 @@ and stop work; partial capture files remain recoverable. Queue capacities:
 Output starts after up to 4096 prefilled frames. These capacities favor robustness,
 not low monitoring latency. The hardware buffer size is device-default; these
 values must not be reported as measured latency. Input/output callbacks and host
-streams have independent timing; capture latency compensation remains unimplemented.
+streams have independent timing. Capture gating follows the audible frame clock;
+manual placement compensation is available, while hardware clock synchronization
+and automatic latency measurement remain unimplemented.
 
 Live preparation reconstructs effects up to a future bar on the GUI worker.
 The playback feeder swaps already-prepared state at that sample index; it does
@@ -75,9 +77,9 @@ expanded events per track and 131072 per project, 16 recursive pattern levels,
 128 repetitions, up to 4096 bars but at most one hour of arrangement time.
 Voicebanks allow up to 2048 sample entries each. Individual decoding is bounded
 at 691200000 interleaved samples (one hour at stereo 96 kHz); at lower rates this
-sample-count cap permits longer files. Disk-cache use still grows with total
-asset durations and must be provisioned and monitored. There is no aggregate
-cache-byte quota, low-disk preflight or automatic cache eviction.
+sample-count cap permits longer files. Disk-cache reservations are aggregate and
+bounded. Native free-space preflight and orphan-only PCM eviction are implemented
+in `storage`; active leases, original media and voicebank samples are never evicted.
 
 Source paths are project-relative; canonical containment rejects traversal and
 escaping symlinks. Output creation uses create-new; imported audio is copied into
@@ -102,3 +104,17 @@ and decoded input to 5,760,000 interleaved samples. Pitch uses at most 64 window
 suggestions are optional metadata, not phoneme recognition. Preset harmony expands
 within existing track/singer/effect limits. Vocal units are indexed by start time
 and cumulative end time so inactive phonemes are not scanned on every sample.
+
+## Mini-notation increment
+
+`mini` compiles bounded immutable ASTs and queries musical cycle ranges during
+preparation. Track seeds and deterministic coordinate hashes govern random events.
+`engine` consumes the same Event representation as legacy patterns. `export` uses
+that renderer for region preroll and post-fader isolated stems. Pause gates queue
+consumption without dropping queued PCM or advancing the audible frame counter.
+`timeline` integrates tempo segments analytically and maps meter-aware bars,
+beats, seconds and frames. Prepared schedules convert event boundaries once.
+Renderer checkpoints retain oscillator/vocal/effect state for rewind and loops.
+`recording` supplies an atomic capture gate and bounded loop-span metadata;
+`storage` uses native free-space checks, cross-process cache reservations and
+orphan-only eviction. See [workflow limits](DAW_EXPANSION.md).

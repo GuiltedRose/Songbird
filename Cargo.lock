@@ -2339,7 +2339,7 @@ dependencies = [
 
 [[package]]
 name = "songbird"
-version = "0.1.0"
+version = "0.5.0"
 dependencies = [
  "anyhow",
  "claxon",
@@ -2347,6 +2347,7 @@ dependencies = [
  "eframe",
  "flacenc",
  "hound",
+ "libc",
  "md-5",
  "rtrb",
  "serde",

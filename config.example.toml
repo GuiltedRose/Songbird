@@ -38,3 +38,13 @@ pronunciation_default = "auto"
 [voicebank]
 default_language = "auto"
 default_inventory = "auto"
+
+[recording]
+latency_ms = 0.0
+count_in_bars = 1
+pre_roll_bars = 0
+metronome = false
+
+[storage]
+cache_bytes = 4294967296
+minimum_free_bytes = 67108864

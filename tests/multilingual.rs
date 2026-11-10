@@ -70,6 +70,11 @@ fn inventories_and_punctuation_do_not_add_syllables() {
 #[test]
 fn resource_profile_and_lazy_dictionary_survive_copy() {
     let source = Fixture::new();
+    phonetics::command(
+        &source.0,
+        &["set", "la", "inventory", "la-classical"].map(str::to_owned),
+    )
+    .unwrap();
     let destination = Fixture::new();
     fs::create_dir_all(source.0.join("languages")).unwrap();
     let mut profile = phonetics::Profile::load(&source.0, "la").unwrap();

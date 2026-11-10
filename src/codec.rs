@@ -94,6 +94,7 @@ pub struct Asset {
     page: Vec<[f32; 2]>,
     page_start: u64,
     page_len: usize,
+    _lease: crate::storage::Lease,
 }
 impl Asset {
     pub fn decode(path: &Path, cache: &Path) -> Result<Self> {
@@ -101,6 +102,27 @@ impl Asset {
     }
     pub(crate) fn decode_bounded(path: &Path, cache: &Path, max_samples: u64) -> Result<Self> {
         let target = unique(cache, "pcm", "raw")?;
+        let ext = path
+            .extension()
+            .and_then(|v| v.to_str())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let samples = match ext.as_str() {
+            "wav" => hound::WavReader::open(path)?.len() as u64,
+            "flac" => {
+                let info = claxon::FlacReader::open(path)?.streaminfo();
+                info.samples
+                    .map(|n| n.saturating_mul(info.channels as u64))
+                    .unwrap_or(max_samples)
+            }
+            _ => anyhow::bail!("unsupported audio format: {ext}"),
+        };
+        ensure!(samples <= max_samples, "decoded asset exceeds sample limit");
+        let lease = crate::storage::Lease::reserve(
+            target.clone(),
+            samples.saturating_mul(4),
+            &crate::phonetics::app_config().storage,
+        )?;
         let mut writer = BufWriter::new(
             OpenOptions::new()
                 .create_new(true)
@@ -114,7 +136,7 @@ impl Asset {
         let mut push = |x: f32| -> Result<()> {
             ensure!(x.is_finite(), "nonfinite audio sample");
             ensure!(
-                count < max_samples,
+                count < max_samples && count < samples,
                 "decoded asset exceeds resource limit of {max_samples} interleaved samples"
             );
             peak = peak.max(x.abs());
@@ -194,6 +216,7 @@ impl Asset {
             page: Vec::new(),
             page_start: u64::MAX,
             page_len: 0,
+            _lease: lease,
         })
     }
     pub fn frame(&mut self, index: i64) -> Result<[f32; 2]> {
@@ -246,11 +269,6 @@ impl Asset {
     }
     pub fn duration(&self) -> f64 {
         self.frames as f64 / self.rate as f64
-    }
-}
-impl Drop for Asset {
-    fn drop(&mut self) {
-        let _ = fs::remove_file(&self.path);
     }
 }
 

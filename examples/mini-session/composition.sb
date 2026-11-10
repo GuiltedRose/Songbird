@@ -1,0 +1,57 @@
+# Synthetic integration song. Original generated material; no human recordings.
+project "Mini Garden"
+tempo 120
+marker chorus at 8b
+tempo at @chorus 140
+tempo ramp 16b 24b 140 120
+signature 4/4
+signature at bar 5 6/8
+bars 8
+rate 16000
+bits 24
+voice latin { bank "default:la"; language la }
+section verse at 0b {
+    track drums {
+        notation mini
+        cycle 4
+        seed 127
+        pattern "kick(3,8), [~ snare]*2, hat*8?0.15"
+        loop
+        gain 0.16
+    }
+    track bass {
+        synth triangle
+        notation mini
+        notes "<c2 g2 ab2 g2>"
+        loop
+        gain 0.12
+        filter 1200
+        automate filter "0b=600 8b=1800 16b=800"
+    }
+    track keys {
+        synth sine
+        notation mini
+        notes "[c4 [eb4 g4]] <[c4,eb4,g4] [ab3,c4,eb4]>"
+        loop
+        gain 0.09
+        automate pan "0b=-0.5 8b=0.5 16b=0" linear
+        delay 0.18 0.2 0.15
+    }
+    track recorded-fixture {
+        import "samples/generated.wav"
+        gain 0.08
+        fade in 20ms
+        fade out 20ms
+    }
+}
+section response at @chorus {
+    track singer {
+        use voice latin
+        notation mini
+        notes "c4 d4 e4 g4"
+        cycles 2
+        lyrics "salve mundi salve mundi"
+        gain 0.08
+    }
+}
+master limit -1

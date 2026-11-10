@@ -14,7 +14,7 @@ source/destination paths may be absolute. Open a bank before using its commands.
 | Command | Operation |
 |---|---|
 | `voicebank help` | List Studio commands |
-| `voicebank new PATH NAME [english]` | Create a new bank; English is currently supported |
+| `voicebank new PATH NAME [LANGUAGE|auto]` | Create a bank from an installed language profile |
 | `voicebank open PATH` | Reopen a bank and its saved Studio session |
 | `voicebank close` | Hide/close the Studio view after takes finish |
 | `voicebank register NAME` | Set the register for future takes and coverage |

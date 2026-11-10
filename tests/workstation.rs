@@ -463,6 +463,7 @@ fn live_preroll_is_off_playback_worker() {
     let s = language::parse("rate 16000;tempo 120;bars 8;track a {notes C4:4;loop}").unwrap();
     let mut r = Renderer::prepare(&f.0, s).unwrap();
     let live = LiveContext {
+        clock: None,
         state: Arc::new(Meters::default()),
         bar: 32000,
         rate: 16000,

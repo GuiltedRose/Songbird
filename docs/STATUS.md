@@ -72,7 +72,7 @@ it does not predict performance for large human banks or long projects.
 | Area | Current evidence and remaining work |
 |---|---|
 | Physical input/output | Actual CPAL stream/queue/writer implementation exists; `/dev/snd` is absent here. Microphone/line input, stereo channels, overdubbing, monitoring, device loss, and sustained playback need compatible hardware tests. |
-| Capture synchronization | Imported/arranged audio shares a sample-indexed transport. New takes need explicit placement; automatic input-latency compensation and shared-clock capture alignment are not implemented. |
+| Capture synchronization | Imported/arranged audio shares a sample-indexed transport. Timeline takes use output-clock gating and automatic clip placement with manual latency compensation. Automatic round-trip measurement, synchronized device clocks and physical alignment validation remain outstanding. |
 | Monitoring | Uses a second output stream, requires host concurrent-stream support; uncalibrated latency. No monitored-output gain control. |
 | Human English singing | Dictionary, bank selection, syllable alignment, consonant playback, vowel PSOLA, vibrato, bends, smoothing and dynamics are implemented. No authorized human bank was supplied. Intelligibility, pitch accuracy, formant quality and useful register range remain unverified. |
 | Vocal character creation | Integrated Studio commands/panel support guided recording, take import/selection, waveform/timing edits, local pitch/onset/voicing suggestions, publication, coverage checks, dictionaries, presets, preview, and portable reuse. Suggestions need manual inspection; phoneme identity comes from the chosen target. |
@@ -80,8 +80,8 @@ it does not predict performance for large human banks or long projects.
 | Editing | Text operations are functional; waveform display assists inspection. Group labels are metadata, not bulk-edit selectors; there are no mouse waveform handles, automatic relinking, or spectral/noise-profile editor. |
 | Stretch/effects | Granular stretching/pitch shift and simple native effects are implemented. Extreme shifts and transients can produce artifacts. Denoise is amplitude suppression rather than profile-based spectral subtraction. |
 | Live changes | Prepared, quantized replacement is implemented and its preroll tested offline. Real-time boundary behavior needs hardware testing. Replacement is not crossfaded and may click; a missed boundary keeps the original mix and reports the failure. |
-| Tempo/signature | Global settings and live reevaluation are supported; no within-song tempo map. |
-| Large sessions | PCM pages and audio queues are bounded, but total disk cache has no quota/eviction or low-disk preflight. Stress, disk exhaustion and power-loss testing remain outstanding. |
+| Tempo/signature | Global settings and live reevaluation are supported; within-song instant/ramped tempo and bar-boundary meter maps are now implemented; see the latest DAW entry below. |
+| Large sessions | PCM pages/queues and aggregate cache reservations are bounded; orphan-only eviction and native disk preflight are implemented. Quota/failure fixtures pass; sustained hardware and real disk-exhaustion/power-loss testing remain outstanding. |
 | Recovery | Atomic generations, prior manifests, drafts, take preservation, and PCM WAV repair are implemented/tested. An export can delay periodic drafts; original media still needs operator backups. |
 | GUI workflow | Native window creation/rendering passed. Keyboard completion/history/search, recording controls and a full creative session need manual interaction acceptance. |
 
@@ -150,3 +150,62 @@ Latin voicebanks. Punctuation is separate phrase metadata; note timing remains
 explicit. This increment is untested; previous validation counts do not cover it.
 No human singing or native Windows/macOS validation was performed. See
 [operator checks](LANGUAGES.md#punctuation-and-validation).
+
+## Historical DAW milestone: mini-notation subset (superseded below)
+
+Implemented opt-in cycle-aware mini-notation, deterministic seeds, bounded AST
+queries, sample/drum/singer integration, editor assistance, pause/resume, step and
+filter automation, region export with preroll, and isolated post-fader stems.
+The broader DAW specification remains incomplete; see [delivery status and remaining
+work](DAW_EXPANSION.md). In particular there are no tempo/meter maps, marker-aware
+transport, punch/count-in recording, aggregate cache quotas or complete timeline UI.
+
+The baseline lockfile/package-version mismatch, Latin inventory-ID validation,
+and Studio guidance wording regressions were repaired. The full 80-test suite
+passed, followed by the additional pause queue/clock test. Focused mini/render
+regressions cover scheduling, resource rejection, PCM equivalence, save/reopen,
+region preroll, stems and preservation. Strict all-target Clippy passed. The
+original generated example exported 128,000 frames per full FLAC/WAV mix at 16 kHz
+and a 64,000-frame region; no human recordings or hardware streams were used.
+These checks do not validate the incomplete systems or native Windows/macOS audio.
+
+Final Linux release build and CLI asset check passed. Release benchmark of the
+8-second mini example: 128,000 frames at 16 kHz, peak 0.197392, zero over-full-scale
+samples, 14.2 ms preparation and 277 ms total (28.87x duration). This is one local
+synthetic workload, not a hardware latency measurement or a general performance
+guarantee. No remote runner, installation, activation or rollout was performed.
+
+## DAW workflow completion increment
+
+Added the analytic musical clock (tempo jumps/linear ramps and bar-boundary meter
+maps), markers/repeated sections, frame-accurate event mapping, bidirectional
+prerolled seeking, checkpointed range loops, current musical position display,
+transport preferences, input-clock gates, count-in/metronome/pre-roll, punch/loop
+recording, numbered non-destructive loop spans and take comping/replay. Added clip
+IDs/selection/relinking, musical split/trim, snap/group operations, scalar effect
+and vocal automation, per-channel peak feedback, 128-frame transition fades, cache
+reservations/orphan eviction and native disk preflight. Guides are embedded offline.
+
+The full 92-test Linux suite passes, including original workstation/voicebank
+regressions and new clock/onset-frame, gate/count-in, loop-span, comp, quota and
+transport-persistence fixtures. Strict all-target Clippy and release build pass.
+The expanded generated song renders 210,051 frames per FLAC/WAV mix at 16 kHz,
+peak 0.19739243 and zero clipped samples, plus a 64,000-frame region and five
+isolated stems. Its clock includes 120→140 BPM, a linear ramp, 6/8 and a marker;
+its vocals and imported clip are original procedural fixtures.
+
+No claim of physical microphone accuracy, synchronized hardware clocks, natural
+human singing or native Windows/macOS operation is made. These require operator
+acceptance. Loop editing/seeking use prepared stream restarts and may have short
+hardware gaps. Source/lease/recording data are preserved; no rollout or remote
+workflow dispatch occurred. See [workflow and limits](DAW_EXPANSION.md).
+
+Final generated-session acceptance additionally compared every decoded FLAC/WAV
+sample with a fresh renderer after project reopen: 210,051 frames matched within
+24-bit quantization tolerance. The release CLI asset check passed. One release
+benchmark prepared in 12.8 ms and rendered in 319 ms total (41.19x duration), peak
+0.197392 and zero clipped samples; this is a synthetic single-workload measurement.
+The current native GUI smoke attempt could not connect to an X server in this
+execution environment. GUI interaction and hardware acceptance therefore remain
+unverified for this increment; the display failure is not a demonstrated code
+failure. No Windows/macOS runner or rollout was executed.

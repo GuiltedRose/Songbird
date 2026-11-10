@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     };
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => println!(
-            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT [BANK]\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
+            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird render-region PROJECT OUTPUT START END [RATE BITS]\nsongbird stems PROJECT NEW_DIRECTORY\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT [BANK]\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
         ),
         Some("gui-smoke") => gui::smoke(Project::open(Path::new(arg(1)?))?, args.get(2).cloned())?,
         Some("recover-take") => println!("{}", codec::recover_wav(Path::new(arg(1)?))?.display()),
@@ -46,6 +46,34 @@ fn main() -> Result<()> {
                 start.elapsed(),
                 r.score.duration() / start.elapsed().as_secs_f64()
             );
+        }
+        Some("render-region") => {
+            let p = Project::open(Path::new(arg(1)?))?;
+            let mut score = language::parse(&p.source)?;
+            if let Some(rate) = args.get(5) {
+                score.rate = rate.parse()?;
+            }
+            if let Some(bits) = args.get(6) {
+                score.bits = bits.parse()?;
+            }
+            anyhow::ensure!(
+                [16000, 22050, 24000, 44100, 48000, 88200, 96000].contains(&score.rate),
+                "unsupported sample rate"
+            );
+            anyhow::ensure!([16, 24].contains(&score.bits), "bit depth 16|24");
+            let start = score.clock()?.parse(arg(3)?, &score.markers)?;
+            let end = score.clock()?.parse(arg(4)?, &score.markers)?;
+            println!(
+                "{:?}",
+                songbird::export::region(&p.root, score, Path::new(arg(2)?), start, end)?
+            );
+        }
+        Some("stems") => {
+            let p = Project::open(Path::new(arg(1)?))?;
+            let score = language::parse(&p.source)?;
+            for report in songbird::export::stems(&p.root, &score, Path::new(arg(2)?))? {
+                println!("{report:?}");
+            }
         }
         Some("convert") => {
             let cache = std::env::temp_dir().join("songbird-convert");

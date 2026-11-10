@@ -3,6 +3,11 @@ use crate::locale::Catalog;
 use eframe::egui;
 pub const TOPICS: &[(&str, &str)] = &[
     ("music", "Start making music"),
+    ("mini", "Mini-notation"),
+    ("daw", "DAW workflow"),
+    ("timeline", "Musical time and transport"),
+    ("recording", "Recording and calibration"),
+    ("editing", "Editing and mixing"),
     ("voicebank", "Create your first voicebank"),
     ("voicebank-reference", "Voicebanks"),
     ("commands", "Command reference"),
@@ -15,6 +20,11 @@ pub const TOPICS: &[(&str, &str)] = &[
 ];
 pub fn document(topic: &str) -> Option<&'static str> {
     Some(match topic {
+        "mini" => include_str!("../docs/MINI_NOTATION.md"),
+        "daw" => include_str!("../docs/DAW_EXPANSION.md"),
+        "timeline" => include_str!("../docs/TIMELINE.md"),
+        "recording" => include_str!("../docs/RECORDING.md"),
+        "editing" => include_str!("../docs/EDITING.md"),
         "music" => include_str!("../docs/MAKING_MUSIC.md"),
         "voicebank" => include_str!("../docs/FIRST_VOICEBANK.md"),
         "voicebank-reference" => include_str!("../docs/VOICEBANKS.md"),
