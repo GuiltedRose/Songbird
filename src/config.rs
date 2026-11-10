@@ -107,7 +107,7 @@ pub enum Base {
     Dark,
     Light,
 }
-#[derive(Clone, Debug, Default, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     pub base: Base,

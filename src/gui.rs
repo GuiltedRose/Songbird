@@ -1188,7 +1188,7 @@ fn paint_peaks(ui: &mut egui::Ui, peaks: &[f32], height: f32, color: egui::Color
                 egui::pos2(x, rect.center().y - y),
                 egui::pos2(x, rect.center().y + y),
             ],
-            egui::Stroke::new(1., color),
+            egui::Stroke::new(1.0_f32, color),
         );
     }
     rect
