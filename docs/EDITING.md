@@ -110,3 +110,9 @@ evaluation, render, and waveform jobs now leave the editor interactive. Only
 explicit project replacement operations (new/open/save-as) temporarily disable
 it. Theme reload previously also reset font loading, catalogs, and panel toggles
 for every successful config event; those now apply only when relevant values change.
+
+Transport numbers refresh four times per second with monospaced position/level
+text. The main strip shows bar/beat and tenths of seconds rather than rapidly
+changing ticks; remaining time uses whole seconds. Numeric input/output levels
+hold each interval's maximum peak. Waveforms and progress movement keep their
+normal refresh rate; audio clocks and scheduling are unchanged.

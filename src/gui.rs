@@ -256,6 +256,10 @@ pub struct App {
     dirty: bool,
     draft_at: Instant,
     smoke_frames: Option<u32>,
+    readout_at: Instant,
+    readout_seconds: f64,
+    readout_levels: [f32; 2],
+    readout_pending: [f32; 2],
     pub output_peak: f32,
     pub input_peak: f32,
 }
@@ -334,6 +338,10 @@ impl App {
             dirty: false,
             draft_at: Instant::now(),
             smoke_frames: None,
+            readout_at: Instant::now() - Duration::from_secs(1),
+            readout_seconds: 0.,
+            readout_levels: [0.; 2],
+            readout_pending: [0.; 2],
             output_peak: 0.,
             input_peak: 0.,
         };
@@ -1674,6 +1682,28 @@ impl eframe::App for App {
             self.scope_peak = 0.;
             self.scope_samples = 0;
         }
+        // Hold interval peaks so readable numbers do not hide short transients.
+        self.readout_pending[0] = self.readout_pending[0].max(if self.playback.is_some() {
+            self.output_peak
+        } else {
+            0.
+        });
+        self.readout_pending[1] = self.readout_pending[1].max(if self.recording.is_some() {
+            self.input_peak
+        } else {
+            0.
+        });
+        if self.readout_at.elapsed() >= Duration::from_millis(250) {
+            self.readout_at = Instant::now();
+            self.readout_seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| {
+                p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / p.rate as f64
+            });
+            self.readout_levels = self.readout_pending;
+            self.readout_pending = [0.; 2];
+        }
+        if self.playback.is_none() {
+            self.readout_seconds = self.cursor_seconds;
+        }
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
             self.audio_controls(ui);
             ui.horizontal(|ui| {
@@ -1731,26 +1761,23 @@ impl eframe::App for App {
                     ui.colored_label(self.palette.recording, self.catalog.text("● REC"));
                 }
             });
-            ui.horizontal(|ui| {
+            ui.horizontal_wrapped(|ui| {
                 if let Some((a,b)) = self.playback_range { ui.small(format!("Range {a:.3}–{b:.3}s{}",if self.loop_enabled { " (loop)" } else { "" })); }
                 if let Some(s) = &self.preview {
                     ui.label(format!(
-                        "{} BPM  {}/{}  {} Hz / {} bit",
-                        s.tempo, s.signature[0], s.signature[1], s.rate, s.bits
+                        "{} Hz / {} bit",
+                        s.rate, s.bits
                     ));
                 }
                 if let Some(score) = &self.preview
                     && let Ok(clock) = score.clock()
                 {
-                    let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| {
-                        p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64
-                            / p.rate as f64
-                    });
+                    let seconds = self.readout_seconds;
                     let clock = self.playback.as_ref().map_or(clock,|p|p.clock().clone());
                     let beat = clock.beat(seconds);
-                    let (bar, count, tick, sig) = clock.position(beat);
-                    ui.label(format!(
-                        "Bar {bar} | Beat {count} | Tick {tick} · {:.1} BPM · {}/{} · {:.3}/{:.3}s",
+                    let (bar, count, _, sig) = clock.position(beat);
+                    ui.monospace(format!(
+                        "Bar {bar:>3} | Beat {count} · {:.1} BPM · {}/{} · {:>6.1}/{:.1}s",
                         clock.bpm(beat),
                         sig[0],
                         sig[1],
@@ -1761,21 +1788,20 @@ impl eframe::App for App {
                 if let Some(p) = &self.playback {
                     use std::sync::atomic::Ordering::Relaxed;
                     ui.label(format!(
-                        "{:.2}s · underruns {}",
-                        p.state.frames.load(Relaxed) as f64 / p.rate as f64,
+                        "underruns {}",
                         p.state.underruns.load(Relaxed)
                     ));
                 }
                 if let Some(score) = &self.preview {
                     let duration = score.duration();
                     let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / p.rate as f64);
-                    ui.add(egui::ProgressBar::new((seconds/duration.max(0.001)).clamp(0.,1.) as f32).desired_width(140.).text(format!("{:.1}s left",(duration-seconds).max(0.))));
+                    ui.add(egui::ProgressBar::new((seconds/duration.max(0.001)).clamp(0.,1.) as f32).desired_width(140.).text(format!("{:.0}s left",(duration-self.readout_seconds).max(0.))));
                 }
-                ui.label(format!(
-                    "OUT {:.1} dB  IN {:.1} dB",
-                    20. * self.output_peak.max(1e-6).log10(),
-                    20. * self.input_peak.max(1e-6).log10()
-                ));
+                ui.monospace(format!(
+                    "OUT {:>4.0} dB  IN {:>4.0} dB",
+                    20. * self.readout_levels[0].max(1e-6).log10(),
+                    20. * self.readout_levels[1].max(1e-6).log10()
+                )).on_hover_text("Peak level held over each 250 ms display interval");
                 if let Some(r) = &self.recording {
                     use std::sync::atomic::Ordering::Relaxed;
                     ui.label(format!(
