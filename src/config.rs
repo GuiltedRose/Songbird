@@ -1,7 +1,7 @@
 //! User appearance preferences, separate from project and audio state.
 use anyhow::{Context, Result, ensure};
 use eframe::egui::{self, Color32, FontFamily, FontId, TextStyle};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use std::{
     fs,
     io::{ErrorKind, Read},
@@ -9,7 +9,7 @@ use std::{
     time::{Duration, Instant, SystemTime},
 };
 
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Config {
     pub version: u32,
@@ -19,6 +19,7 @@ pub struct Config {
     pub voicebank: crate::locale::BankPreferences,
     pub recording: crate::recording::Settings,
     pub storage: crate::storage::Limits,
+    pub audio: AudioPreferences,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -30,10 +31,54 @@ impl Default for Config {
             voicebank: Default::default(),
             recording: Default::default(),
             storage: Default::default(),
+            audio: Default::default(),
         }
     }
 }
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct AudioPreferences {
+    pub input: Option<String>,
+    pub output: Option<String>,
+    pub channels: u16,
+    pub format: String,
+}
+impl Default for AudioPreferences {
+    fn default() -> Self {
+        Self {
+            input: None,
+            output: None,
+            channels: 1,
+            format: "flac".into(),
+        }
+    }
+}
+/// Merge only audio preferences; invalid existing files are never overwritten.
+pub fn save_audio(path: &std::path::Path, audio: &AudioPreferences) -> Result<()> {
+    if let Ok(meta) = fs::metadata(path) {
+        ensure!(
+            meta.is_file() && meta.len() <= 65536,
+            "config must be a regular file of at most 64 KiB"
+        );
+    }
+    let mut value = match fs::read_to_string(path) {
+        Ok(source) => {
+            Config::parse(&source)?;
+            toml::from_str::<toml::Value>(&source)?
+        }
+        Err(e) if e.kind() == ErrorKind::NotFound => toml::Value::Table(Default::default()),
+        Err(e) => return Err(e.into()),
+    };
+    value
+        .as_table_mut()
+        .context("config must be a table")?
+        .insert("audio".into(), toml::Value::try_from(audio)?);
+    let text = toml::to_string_pretty(&value)?;
+    Config::parse(&text)?;
+    fs::create_dir_all(path.parent().context("config needs parent")?)?;
+    crate::project::atomic(path, text.as_bytes())
+}
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Appearance {
     pub font_size: f32,
@@ -55,7 +100,7 @@ impl Default for Appearance {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Default, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Base {
     #[default]
@@ -130,6 +175,14 @@ impl Config {
                 && config.storage.minimum_free_bytes <= 1024 * 1024 * 1024 * 1024,
             "invalid storage limits"
         );
+        ensure!(
+            [1, 2].contains(&config.audio.channels),
+            "audio channels must be 1 or 2"
+        );
+        ensure!(
+            ["wav", "flac"].contains(&config.audio.format.as_str()),
+            "audio format must be wav or flac"
+        );
         let a = &config.appearance;
         ensure!(
             [a.font_size, a.editor_font_size]
@@ -181,40 +234,50 @@ impl Config {
         })
     }
     pub fn apply(&self, ctx: &egui::Context) -> Result<()> {
+        self.apply_changed(ctx, None)
+    }
+    pub fn apply_changed(&self, ctx: &egui::Context, previous: Option<&Config>) -> Result<()> {
         let p = self.palette()?;
-        let mut v = match self.theme.base {
-            Base::Dark => egui::Visuals::dark(),
-            Base::Light => egui::Visuals::light(),
-        };
-        v.panel_fill = p.panel;
-        v.window_fill = p.panel;
-        v.extreme_bg_color = p.background;
-        v.code_bg_color = p.background;
-        v.override_text_color = Some(p.text);
-        v.weak_text_color = Some(p.muted);
-        v.selection.bg_fill = p.selection;
-        v.selection.stroke.color = p.text;
-        v.widgets.active.fg_stroke.color = p.accent;
-        v.widgets.hovered.fg_stroke.color = p.accent;
-        v.hyperlink_color = p.accent;
-        ctx.set_visuals(v);
-        ctx.style_mut(|style| {
-            for (kind, scale) in [
-                (TextStyle::Body, 1.),
-                (TextStyle::Button, 1.),
-                (TextStyle::Small, 0.85),
-                (TextStyle::Heading, 1.35),
-            ] {
+        if previous.is_none_or(|old| old.theme != self.theme) {
+            let mut v = match self.theme.base {
+                Base::Dark => egui::Visuals::dark(),
+                Base::Light => egui::Visuals::light(),
+            };
+            v.panel_fill = p.panel;
+            v.window_fill = p.panel;
+            v.extreme_bg_color = p.background;
+            v.code_bg_color = p.background;
+            v.override_text_color = Some(p.text);
+            v.weak_text_color = Some(p.muted);
+            v.selection.bg_fill = p.selection;
+            v.selection.stroke.color = p.text;
+            v.widgets.active.fg_stroke.color = p.accent;
+            v.widgets.hovered.fg_stroke.color = p.accent;
+            v.hyperlink_color = p.accent;
+            ctx.set_visuals(v);
+        }
+        if previous.is_none_or(|old| {
+            old.appearance.font_size != self.appearance.font_size
+                || old.appearance.editor_font_size != self.appearance.editor_font_size
+        }) {
+            ctx.style_mut(|style| {
+                for (kind, scale) in [
+                    (TextStyle::Body, 1.),
+                    (TextStyle::Button, 1.),
+                    (TextStyle::Small, 0.85),
+                    (TextStyle::Heading, 1.35),
+                ] {
+                    style.text_styles.insert(
+                        kind,
+                        FontId::new(self.appearance.font_size * scale, FontFamily::Proportional),
+                    );
+                }
                 style.text_styles.insert(
-                    kind,
-                    FontId::new(self.appearance.font_size * scale, FontFamily::Proportional),
+                    TextStyle::Monospace,
+                    FontId::monospace(self.appearance.editor_font_size),
                 );
-            }
-            style.text_styles.insert(
-                TextStyle::Monospace,
-                FontId::monospace(self.appearance.editor_font_size),
-            );
-        });
+            });
+        }
         Ok(())
     }
 }
@@ -287,6 +350,7 @@ pub struct Watcher {
     explicit: bool,
     last: Option<Stamp>,
     checked: Instant,
+    pending: Option<Stamp>,
 }
 impl Default for Watcher {
     fn default() -> Self {
@@ -313,6 +377,7 @@ impl Default for Watcher {
             explicit: explicit.is_some(),
             last: None,
             checked: Instant::now(),
+            pending: None,
         }
     }
 }
@@ -322,6 +387,7 @@ impl Watcher {
             return Ok(Config::default());
         };
         self.last = Some(stamp(path));
+        self.pending = None;
         self.checked = Instant::now();
         if let Ok(meta) = fs::metadata(path) {
             ensure!(meta.is_file(), "config must be a regular file");
@@ -350,6 +416,12 @@ impl Watcher {
         let path = self.path.as_ref()?;
         let next = stamp(path);
         if self.last.as_ref() == Some(&next) {
+            self.pending = None;
+            return None;
+        }
+        // Require a stable stamp across two polls (500 ms quiet period).
+        if self.pending.as_ref() != Some(&next) {
+            self.pending = Some(next);
             return None;
         }
         Some(self.load())
@@ -358,6 +430,41 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn audio_preferences_round_trip_and_preserve_other_settings() {
+        let file = crate::codec::unique(&std::env::temp_dir(), "songbird-audio", "toml").unwrap();
+        fs::write(
+            &file,
+            "[theme]\naccent='#112233'\n[recording]\nlatency_ms=12.0",
+        )
+        .unwrap();
+        let audio = AudioPreferences {
+            input: Some("Disconnected USB mic".into()),
+            output: Some("Speakers".into()),
+            channels: 2,
+            format: "wav".into(),
+        };
+        save_audio(&file, &audio).unwrap();
+        let loaded = Config::parse(&fs::read_to_string(&file).unwrap()).unwrap();
+        assert_eq!(loaded.audio, audio);
+        assert_eq!(loaded.recording.latency_ms, 12.);
+        assert_eq!(loaded.theme.accent.as_deref(), Some("#112233"));
+        assert!(!crate::audio::DeviceList::available(
+            &[],
+            loaded.audio.input.as_deref()
+        ));
+        assert!(crate::audio::DeviceList::available(&[], None));
+        assert!(crate::audio::DeviceList::available(
+            &["Speakers".into()],
+            loaded.audio.output.as_deref()
+        ));
+        fs::write(&file, "[theme").unwrap();
+        assert!(save_audio(&file, &audio).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "[theme");
+        fs::remove_file(file).unwrap();
+        assert!(Config::parse("[audio]\nchannels=3").is_err());
+        assert!(Config::parse("[audio]\nformat='mp3'").is_err());
+    }
     #[test]
     fn defaults_and_example() {
         Config::parse("").unwrap();
@@ -388,14 +495,19 @@ mod tests {
             explicit: false,
             last: None,
             checked: Instant::now(),
+            pending: None,
         };
         w.load().unwrap();
         let swap = file.with_extension("swap");
         fs::write(&swap, "[theme]\nbase='light'").unwrap();
         fs::rename(swap, &file).unwrap();
         w.checked = Instant::now() - Duration::from_secs(1);
+        assert!(w.poll().is_none());
+        w.checked = Instant::now() - Duration::from_secs(1);
         assert!(matches!(w.poll().unwrap().unwrap().theme.base, Base::Light));
         fs::remove_file(&file).unwrap();
+        w.checked = Instant::now() - Duration::from_secs(1);
+        assert!(w.poll().is_none());
         w.checked = Instant::now() - Duration::from_secs(1);
         assert!(matches!(w.poll().unwrap().unwrap().theme.base, Base::Dark));
     }
@@ -485,6 +597,7 @@ mod tests {
             explicit: true,
             last: None,
             checked: Instant::now(),
+            pending: None,
         };
         let mut current = w.load().unwrap();
         assert_eq!(
@@ -493,12 +606,16 @@ mod tests {
         );
         fs::write(&file, "invalid config").unwrap();
         w.checked = Instant::now() - Duration::from_secs(1);
+        assert!(w.poll().is_none());
+        w.checked = Instant::now() - Duration::from_secs(1);
         assert!(w.poll().unwrap().is_err());
         assert_eq!(
             current.palette().unwrap().accent,
             Color32::from_rgb(17, 34, 51)
         );
         fs::write(&file, "[theme]\nbase='light'\naccent='#445566'").unwrap();
+        w.checked = Instant::now() - Duration::from_secs(1);
+        assert!(w.poll().is_none());
         w.checked = Instant::now() - Duration::from_secs(1);
         current = w.poll().unwrap().unwrap();
         assert_eq!(

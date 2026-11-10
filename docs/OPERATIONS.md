@@ -21,7 +21,7 @@ cargo fetch --locked
 cargo fmt --check
 cargo test --locked --offline
 cargo build --release --locked --offline
-cargo clippy --locked --offline --all-targets
+cargo clippy --locked --offline --all-targets -- -D warnings
 ./target/release/songbird help
 ```
 
@@ -254,3 +254,76 @@ capture receipts retain their target/profile/path for recovery and manual import
 See [mini-notation](MINI_NOTATION.md) for the opt-in syntax, migration and a generated
 example session. See [DAW delivery status](DAW_EXPANSION.md) for pause/resume, region
 and stem commands, validation/rollback, and documented hardware/resource limits.
+
+## GUI fix validation and rollback
+
+This pass was source-reviewed and formatted only. Tests, compilation, GUI, input
+capture, device disconnection, playback timing, and underruns still require the
+operator's validation. No service or host configuration change is needed: launch
+Songbird as your desktop user inside niri/Wayland, with the prerequisites above.
+On CachyOS, the required development/runtime components include Rust/Cargo, a C
+compiler, pkgconf, alsa-lib, libxkbcommon, Wayland/X11 libraries and Mesa/OpenGL.
+Use your existing working audio setup and Rust toolchain (README: Rust 1.97.1).
+
+Before building, close Songbird and keep an executable/config backup. From the
+repository root, in the same shell (the backup directory is printed):
+
+```sh
+songbird_backup=$(mktemp -d "$HOME/songbird-before-gui-fixes.XXXXXX")
+songbird_config=${SONGBIRD_CONFIG:-${XDG_CONFIG_HOME:-$HOME/.config}/songbird/config.toml}
+if [ -f target/release/songbird ]; then cp -p target/release/songbird "$songbird_backup/songbird"; fi
+if [ -f "$songbird_config" ]; then cp -p "$songbird_config" "$songbird_backup/config.toml"; fi
+printf '%s\n' "$songbird_backup"
+# Fetch only if dependencies are not already cached (requires network):
+cargo fetch --locked
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --release --locked
+# Desktop GUI smoke: opens and closes after three frames, with no capture/playback.
+./target/release/songbird gui-smoke examples/acceptance
+# Activation: run the newly built desktop executable explicitly.
+./target/release/songbird examples/acceptance
+```
+
+For an offline machine append `--offline` to Cargo commands that resolve packages
+and skip fetch after transferring cached/vendor dependencies. Run the smoke and
+activation commands from the graphical desktop session, not a headless SSH shell.
+Use a copy of a personal project for hardware checks. Source media, user projects,
+recordings, presets and voicebanks are not changed by these build commands.
+
+Check these interactions before accepting the release:
+
+1. Type continuously for at least 15 seconds (across draft saves); edit/save theme
+   colors repeatedly. Verify unsaved text, cursor/selection, editor focus, scroll,
+   undo/redo and font loading remain stable. Invalid TOML must keep the last theme;
+   a corrected save must recover. Touch/save unchanged TOML: no panel/font resets.
+2. Refresh/select devices, restart the app and verify selections return while the
+   microphone remains off. Disconnect a named device; verify the unavailable label
+   after Refresh and an actionable error on use. Reconnect and refresh to recover.
+3. Record short mono/stereo WAV/FLAC takes with monitoring off, then explicitly on
+   with headphones. Stop/finalize, inspect the preserved take and placement, replay
+   it, and verify asset peaks. Try an unsupported rate/channel combination: expect
+   an error, no crash. Confirm controls prevent duplicate/overlapping recordings.
+4. Import WAV/FLAC; verify asset peaks before evaluation. Play synth-only audio at
+   140 BPM; confirm changing master PCM peaks, individual track envelopes, waveform
+   color and collapse controls. Compare underrun counters with displays open/closed
+   over sustained playback; verify pause/resume, loop and live evaluation still work.
+   Master shows callback-bound PCM; this cannot prove downstream hardware output.
+
+If the new build fails, close it normally so takes finish. Launch the backed-up
+executable (if one existed) and optionally restore the backed-up user config:
+
+```sh
+# Use the printed backup path if this is a new shell.
+# songbird_backup="$HOME/songbird-before-gui-fixes.REPLACE_ME"
+if [ -f "$songbird_backup/config.toml" ]; then cp -p "$songbird_backup/config.toml" "$songbird_config"; fi
+"$songbird_backup/songbird" examples/acceptance
+```
+
+If there was no previous executable, build your known-good source revision in a
+separate checkout and launch it; retain this checkout and all user data. If the
+config did not previously exist, keep it or move it into the backup directory
+instead of deleting it. Never remove projects, recordings, cache leases in use,
+voicebanks, or take indexes as part of application rollback. For interrupted
+recordings use the existing `recover-take` workflow in this guide.

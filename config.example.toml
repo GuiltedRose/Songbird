@@ -36,15 +36,36 @@ pronunciation_default = "auto"
 # font_file = "/absolute/path/to/font.ttf"
 
 [voicebank]
+# Default for new singing selections; composition/project overrides take priority.
+# "auto" follows project/interface language detection (English fallback).
 default_language = "auto"
+# Phoneme inventory/profile used to interpret singing sounds, not a device list.
+# "auto" lets the chosen language select its inventory; existing banks are unchanged.
 default_inventory = "auto"
 
 [recording]
+# Manual placement correction in milliseconds (-2000 to +2000).
+# Positive moves the recorded clip earlier; measure with your hardware loopback.
 latency_ms = 0.0
+# Audible count-in bars before timeline capture (0..8); immediate Record ignores it.
 count_in_bars = 1
+# Arrangement bars played before the punch-in point (0..8), after count-in.
 pre_roll_bars = 0
+# Timeline playback click; not digitally mixed into recorded input.
 metronome = false
 
 [storage]
+# Maximum regenerable decoded PCM cache, in bytes (4294967296 = 4 GiB).
+# Source audio, recordings, projects, and voicebanks are never cache-evicted.
 cache_bytes = 4294967296
+# Keep this much disk space free (67108864 = 64 MiB); capture/decoding may refuse
+# to start or continue when space is insufficient. This is not a cache size.
 minimum_free_bytes = 67108864
+
+[audio]
+# Omit input/output for System Default. Exact CPAL names can also be set in the GUI.
+# input = "USB Microphone"
+# output = "Speakers"
+channels = 1  # 1 = mono, 2 = stereo input; hardware must support the project rate.
+format = "flac"  # "wav" or lossless "flac"; original capture WAV is preserved.
+# Monitoring always starts OFF and is never persisted; no microphone starts here.

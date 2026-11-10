@@ -94,3 +94,19 @@ or device loss preserves new partial output and reports failure; do not treat it
 as a completed take/export. Disk checks cannot reserve free space against unrelated
 processes writing to the same volume. Use the project/WAV recovery commands in
 [operations](OPERATIONS.md), and keep backups of original media.
+
+## Theme reload and background saves
+
+Config polling observes only the selected TOML file, waits for a stable metadata
+stamp across two polls, validates the whole document, and applies changed values.
+Invalid saves retain the last valid configuration. Appearance reloads neither
+change the composition nor touch egui editor memory, cursor/selection, focus,
+scroll state, or undo history. Unchanged settings do not reset fonts or panels.
+The editor has stable widget and scroll IDs.
+
+Background draft saves previously disabled the editor through `work.busy`, causing
+interrupted typing every five seconds while a dirty document was saved. Draft,
+evaluation, render, and waveform jobs now leave the editor interactive. Only
+explicit project replacement operations (new/open/save-as) temporarily disable
+it. Theme reload previously also reset font loading, catalogs, and panel toggles
+for every successful config event; those now apply only when relevant values change.

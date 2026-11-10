@@ -8,7 +8,7 @@ use std::{
 fn auto() -> String {
     "auto".into()
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Preferences {
     pub interface: String,
@@ -28,7 +28,7 @@ impl Default for Preferences {
         }
     }
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct BankPreferences {
     pub default_language: String,

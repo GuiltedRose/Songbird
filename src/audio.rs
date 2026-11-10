@@ -55,6 +55,32 @@ pub fn devices() -> Result<Vec<String>> {
     }
     Ok(out)
 }
+#[derive(Default)]
+pub struct DeviceList {
+    pub inputs: Vec<String>,
+    pub outputs: Vec<String>,
+}
+impl DeviceList {
+    pub fn refresh() -> Result<Self> {
+        let host = cpal::default_host();
+        let mut inputs = host
+            .input_devices()?
+            .map(|d| d.name())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        let mut outputs = host
+            .output_devices()?
+            .map(|d| d.name())
+            .collect::<std::result::Result<Vec<_>, _>>()?;
+        inputs.sort();
+        inputs.dedup();
+        outputs.sort();
+        outputs.dedup();
+        Ok(Self { inputs, outputs })
+    }
+    pub fn available(names: &[String], selected: Option<&str>) -> bool {
+        selected.is_none_or(|name| names.iter().any(|n| n == name))
+    }
+}
 fn device(input: bool, name: Option<&str>) -> Result<cpal::Device> {
     let h = cpal::default_host();
     if let Some(name) = name {
@@ -137,11 +163,20 @@ fn queued_frame(rx: &mut rtrb::Consumer<[f32; 2]>, state: &Meters, missed: &mut 
         }
     }
 }
+fn device_frame(sample: [f32; 2], channels: usize) -> [f32; 2] {
+    let sample = if channels == 1 {
+        [(sample[0] + sample[1]) * 0.5; 2]
+    } else {
+        sample
+    };
+    sample.map(|v| v.clamp(-1., 1.))
+}
 fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
     d: &cpal::Device,
     c: &cpal::StreamConfig,
     mut rx: rtrb::Consumer<[f32; 2]>,
     state: Arc<Meters>,
+    mut scope: Option<rtrb::Producer<[f32; 2]>>,
 ) -> Result<cpal::Stream> {
     let channels = c.channels as usize;
     let err = state.clone();
@@ -152,13 +187,14 @@ fn output<T: cpal::SizedSample + cpal::FromSample<f32>>(
             for out in data.chunks_mut(channels) {
                 let x = queued_frame(&mut rx, &state, &mut missed);
                 state.update(x);
+                let audible = device_frame(x, channels);
+                if let Some(scope) = &mut scope {
+                    // Sample handoff only: GUI performs all visualization reduction/rendering.
+                    // A full queue drops visualization samples, never stalls audio.
+                    let _ = scope.push(audible);
+                }
                 for (ch, v) in out.iter_mut().enumerate() {
-                    let x = if channels == 1 {
-                        (x[0] + x[1]) * 0.5
-                    } else {
-                        x[ch]
-                    };
-                    *v = T::from_sample(x.clamp(-1., 1.));
+                    *v = T::from_sample(audible[ch]);
                 }
             }
             if missed {
@@ -178,13 +214,14 @@ fn output_stream(
     format: cpal::SampleFormat,
     rx: rtrb::Consumer<[f32; 2]>,
     state: Arc<Meters>,
+    scope: Option<rtrb::Producer<[f32; 2]>>,
 ) -> Result<cpal::Stream> {
     match format {
-        cpal::SampleFormat::F32 => output::<f32>(d, c, rx, state),
-        cpal::SampleFormat::I16 => output::<i16>(d, c, rx, state),
-        cpal::SampleFormat::U16 => output::<u16>(d, c, rx, state),
-        cpal::SampleFormat::I32 => output::<i32>(d, c, rx, state),
-        cpal::SampleFormat::F64 => output::<f64>(d, c, rx, state),
+        cpal::SampleFormat::F32 => output::<f32>(d, c, rx, state, scope),
+        cpal::SampleFormat::I16 => output::<i16>(d, c, rx, state, scope),
+        cpal::SampleFormat::U16 => output::<u16>(d, c, rx, state, scope),
+        cpal::SampleFormat::I32 => output::<i32>(d, c, rx, state, scope),
+        cpal::SampleFormat::F64 => output::<f64>(d, c, rx, state, scope),
         _ => bail!("unsupported device sample format {format}"),
     }
 }
@@ -225,6 +262,8 @@ impl LiveContext {
     }
 }
 pub struct Playback {
+    pub scope: rtrb::Consumer<[f32; 2]>,
+    pub track_scope: rtrb::Consumer<[f32; 128]>,
     stream: Option<cpal::Stream>,
     worker: Option<JoinHandle<Result<()>>>,
     pub state: Arc<Meters>,
@@ -263,7 +302,9 @@ impl Playback {
                     .map_err(|_| anyhow::anyhow!("prefill overflow"))?;
             }
         }
-        let stream = output_stream(&d, &c, format, rx, state.clone())?;
+        let (scope_tx, scope) = rtrb::RingBuffer::new(8192);
+        let (mut track_tx, track_scope) = rtrb::RingBuffer::new(64);
+        let stream = output_stream(&d, &c, format, rx, state.clone(), Some(scope_tx))?;
         let (replace, changes) = mpsc::sync_channel::<Renderer>(1);
         let s = state.clone();
         let worker = thread::spawn(move || -> Result<()> {
@@ -300,6 +341,11 @@ impl Playback {
                     if n == 0 {
                         break;
                     }
+                    let mut peaks = [0.; 128];
+                    for (dst, src) in peaks.iter_mut().zip(&renderer.channel_peaks) {
+                        *dst = *src;
+                    }
+                    let _ = track_tx.push(peaks);
                     for (i, peak) in renderer.channel_peaks.iter().enumerate().take(128) {
                         s.track_peaks[i / 32][i % 32].fetch_max(peak.to_bits(), Ordering::Relaxed);
                     }
@@ -329,6 +375,8 @@ impl Playback {
             return Err(e.into());
         }
         Ok(Self {
+            scope,
+            track_scope,
             stream: Some(stream),
             worker: Some(worker),
             state,
@@ -544,17 +592,17 @@ impl Recording {
             rate as u64 * channels as u64 * 3 * 5,
             crate::phonetics::app_config().storage.minimum_free_bytes,
         )?;
-        let take = codec::unique(&root.join("recordings"), name, "wav")?;
-        let encoder = codec::Encoder::create(&take, rate, channels, bits)?;
         let d = device(true, input_name)?;
         let (c, f) = config(&d, true, rate, Some(channels))?;
+        let take = codec::unique(&root.join("recordings"), name, "wav")?;
+        let encoder = codec::Encoder::create(&take, rate, channels, bits)?;
         let (tx, mut rx) = rtrb::RingBuffer::new(32768);
         let state = Arc::new(Meters::default());
         let (monitor_tx, monitor) = if monitoring {
             let (mt, mr) = rtrb::RingBuffer::new(8192);
             let d = device(false, output_name)?;
             let (c, f) = config(&d, false, rate, None)?;
-            let stream = output_stream(&d, &c, f, mr, Arc::new(Meters::default()))?;
+            let stream = output_stream(&d, &c, f, mr, Arc::new(Meters::default()), None)?;
             (Some(mt), Some(stream))
         } else {
             (None, None)
@@ -695,6 +743,41 @@ impl Drop for Recording {
 #[cfg(test)]
 mod transport_tests {
     use super::*;
+    #[test]
+    fn output_handoff_matches_mono_and_clipped_stereo_and_never_blocks() {
+        assert_eq!(device_frame([2., -2.], 2), [1., -1.]);
+        assert_eq!(device_frame([0.8, -0.2], 1), [0.3, 0.3]);
+        let (mut tx, mut rx) = rtrb::RingBuffer::new(4);
+        for _ in 0..1000 {
+            // Simulate a GUI that sometimes stops draining the bounded handoff.
+            for _ in 0..8 {
+                let _ = tx.push(device_frame([0.25, -0.5], 2));
+            }
+            for _ in 0..4 {
+                assert_eq!(rx.pop().unwrap(), [0.25, -0.5]);
+            }
+        }
+    }
+    #[test]
+    fn recording_finish_stops_capture_and_retains_worker_result() {
+        let state = Arc::new(Meters::default());
+        let worker_state = state.clone();
+        let recording = Recording {
+            stream: None,
+            monitor: None,
+            state: state.clone(),
+            take: "take.wav".into(),
+            worker: Some(thread::spawn(move || {
+                while !worker_state.stopped.load(Ordering::Relaxed) {
+                    thread::yield_now();
+                }
+                Ok(PathBuf::from("take.wav"))
+            })),
+        };
+        let worker = recording.finish();
+        assert!(state.stopped.load(Ordering::Relaxed));
+        assert_eq!(worker.join().unwrap().unwrap(), PathBuf::from("take.wav"));
+    }
     #[test]
     fn pause_preserves_queued_pcm_and_clock_until_resume() {
         let (mut tx, mut rx) = rtrb::RingBuffer::new(4);

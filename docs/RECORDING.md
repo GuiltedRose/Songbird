@@ -1,6 +1,7 @@
 # Timeline recording, calibration and takes
 
-Select input/output devices with `devices`, `input NAME`, `output NAME`; set
+Select input/output devices in **Audio devices & recording**, or use
+`devices`, `input NAME`, `output NAME` (`default` selects System Default); set
 `channels 1|2`. Use headphones before `monitor on` to avoid acoustic feedback.
 Monitoring is explicit and remains audible during count-in/pre-roll. The click is
 mixed into output, not digitally into the input recording; microphones can still
@@ -80,3 +81,25 @@ Settings persist in the normal config under `[recording]`: `latency_ms`,
 0..8 bars, latency to ±2000 ms. Pause preserves the transport clock; gated capture
 waits during pause, while monitoring remains active. Stop recording before seeking,
 changing ranges or restarting looping playback.
+
+## Configuration settings
+
+These settings belong in the user `config.toml`, not the composition. GUI audio
+preferences are saved atomically, preserving other values; invalid TOML is never
+overwritten. TOML comments/formatting may be normalized when preferences are saved.
+Monitoring is deliberately session-only. Device changes affect future streams;
+active capture/playback is not restarted by a config save.
+
+| Setting | Meaning |
+| --- | --- |
+| `voicebank.default_language = "auto"` | Default singing language when the composition/project does not override it. Auto follows language detection with English fallback; existing banks retain their metadata. |
+| `voicebank.default_inventory = "auto"` | Default phoneme inventory (the set of singing sounds). Auto uses the selected language profile. Explicit inventories must match available profiles. |
+| `recording.latency_ms = 0.0` | Manual clip placement correction in milliseconds, from -2000 to +2000. Positive moves clips earlier, clamped at zero. Measure on your hardware; this does not synchronize device clocks. |
+| `recording.count_in_bars = 1` | 0–8 bars counted before timeline recording/pre-roll. Immediate GUI Record and `record` start capture directly. |
+| `recording.pre_roll_bars = 0` | 0–8 arrangement bars played before punch-in, clamped to arrangement start. Input is gated until punch-in. |
+| `recording.metronome = false` | Enable the timeline output click. It is not digitally recorded, but a microphone can pick it up from speakers. |
+| `storage.cache_bytes = 4294967296` | 4 GiB limit for regenerable decoded PCM caches, including active reservations. Source media and recordings are never cache-evicted. |
+| `storage.minimum_free_bytes = 67108864` | 64 MiB disk headroom required by capture/decoding checks. Insufficient disk space produces an error rather than bypassing the limit. |
+| `audio.input`, `audio.output` | Exact CPAL device names. Omitted means System Default. Unavailable named devices produce an error rather than silently switching devices. |
+| `audio.channels = 1` | Mono (1) or stereo (2) input; device must support it at the project sample rate. |
+| `audio.format = "flac"` | FLAC or WAV preference for immediate recording. FLAC finalization retains the original WAV. |

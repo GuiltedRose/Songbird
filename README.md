@@ -318,8 +318,8 @@ cp -n config.example.toml "${XDG_CONFIG_HOME:-$HOME/.config}/songbird/config.tom
 ```
 
 The copy command preserves an existing config. Edit that file in your text editor
-and save: **Songbird automatically reloads appearance changes within about half a
-second**, including during playback. Invalid edits leave the last working theme
+and save: **Songbird automatically reloads appearance changes after a stable save (normally within about one
+second)**, including during playback. Invalid edits leave the last working theme
 in place and show an error in Songbird's console; fix the file and save again.
 No restart is needed for colors, font sizes, or panel visibility.
 
@@ -344,8 +344,8 @@ Choose `dark` or `light` as the base. Omitted colors inherit that base; custom
 colors use quoted `#RRGGBB` values. You can customize backgrounds, text, selection,
 syntax colors, waveforms, and the recording indicator—see the example for all
 keys. Fonts accept sizes from 10 to 32. Optional `window_width` and `window_height`
-set the initial window size and require a restart. Reloading applies configured
-panel visibility, replacing temporary `tracks`/`console` toggles.
+set the initial window size and require a restart. Reloading applies panel visibility only when that setting changes; temporary
+`tracks`/`console` toggles survive unrelated theme saves.
 
 To try a separate theme file without changing your normal config:
 
@@ -353,11 +353,13 @@ To try a separate theme file without changing your normal config:
 SONGBIRD_CONFIG="/absolute/path/to/theme.toml" ./target/release/songbird examples/acceptance
 ```
 
-That file is watched too. No config file is created automatically. A missing
+That file is watched too. Changing GUI audio preferences creates or updates the
+selected TOML file; startup alone does not create one. A missing
 normal config uses defaults; deleting it restores defaults. Invalid startup
 configurations (including a missing explicitly selected file) use defaults and
-report the error. Configuration changes affect appearance only, leaving project
-files and audio settings intact.
+report the error. Only changed settings are applied. Theme changes preserve editor state and do
+not evaluate the composition or restart active audio streams. Audio preferences
+apply to the next explicitly started stream.
 
 ## Help and troubleshooting
 
@@ -402,3 +404,29 @@ Songbird. Pause/resume, step/filter automation, region exports and isolated stem
 are described in [DAW workflow](docs/DAW_EXPANSION.md). The shared timeline supports tempo/meter maps, seeking, loops, punch/loop capture,
 count-in, take comping and bounded PCM cache management. See [recording and
 calibration](docs/RECORDING.md) for hardware-dependent alignment limits.
+
+## Audio devices, recording, and waveforms
+
+Expand **Audio devices & recording** above the editor. Choose input/output or
+**System Default**, mono/stereo input, WAV/FLAC, and a take name; click **Record**,
+then **Stop recording**. **Refresh devices** re-enumerates without starting a
+stream. Missing saved devices remain marked unavailable; reconnect or select
+another device. Unsupported project rates/channels report an error in the console.
+Use headphones before enabling monitoring. Monitoring starts off every session;
+opening Songbird never activates the microphone. Device/channel/format selections
+persist under `[audio]` in the existing user TOML. Text commands remain available;
+`input default` and `output default` select System Default.
+
+The Tracks panel contains collapsible **Live waveform** and **Asset waveform
+peaks** displays using `theme.waveform`. Master displays actual device-bound PCM
+samples; track views show post-fader renderer peak envelopes (up to 128 tracks),
+which can lead audible playback by the bounded audio queue. Imported and completed
+recordings load asset peaks in the background without requiring evaluation.
+Evaluated arrangements show a bounded overview of the first 64 clips; Voicebank
+Studio retains its selected-take view. No synthetic animation is used. Samples
+are handed off through bounded nonblocking queues; aggregation/drawing occur
+outside the audio callback. Slow GUI frames may drop visualization data only.
+
+See [recording settings](docs/RECORDING.md#configuration-settings) for the TOML
+fields and [operator validation and rollback](docs/OPERATIONS.md#gui-fix-validation-and-rollback)
+for the commands to run before using this change.

@@ -17,6 +17,7 @@ use std::{
 const HELP: &str = "play | stop | pause | resume | seek POSITION | jump MARKER | range START END | loop on|off | restart | marker NAME | eval | save | open DIR | save-as DIR | import FILE | render FILE | render-region FILE START END | stems NEW_DIRECTORY | devices | input NAME | output NAME | record NAME flac|wav | record-at NAME START [END] | record-loop NAME | count-in BARS | pre-roll BARS | latency MS | metronome on|off | takes | take-replay ID | take-use ID [AT [TRIM_START TRIM_END]] | record-stop | voicebank help | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
 pub const DEFAULT: &str = include_str!("../examples/garden/composition.sb");
 enum Job {
+    Waveform(Project, PathBuf),
     Language(Project, Vec<String>),
     Studio(studio::Request),
     Capture(Project, String, PathBuf, Capture),
@@ -36,6 +37,7 @@ enum Job {
     TakePreview(Project, u32),
 }
 enum Reply {
+    Waveform(Vec<f32>),
     Language(Vec<String>),
     Studio(Box<studio::Output>),
     Drafted,
@@ -50,6 +52,7 @@ struct Work {
     tx: SyncSender<Job>,
     rx: Receiver<Result<Reply>>,
     busy: bool,
+    replacing_document: bool,
 }
 impl Work {
     fn new() -> Self {
@@ -59,6 +62,10 @@ impl Work {
             while let Ok(job) = rx.recv() {
                 let r = (|| -> Result<Reply> {
                     Ok(match job {
+                        Job::Waveform(p, path) => {
+                            let asset = crate::codec::Asset::decode(&path, &p.root.join("cache"))?;
+                            Reply::Waveform(compact_peaks(&asset.waveform, 2048))
+                        }
                         Job::Language(project, args) => {
                             Reply::Language(crate::phonetics::command(&project.root, &args)?)
                         }
@@ -182,14 +189,17 @@ impl Work {
             tx,
             rx: or,
             busy: false,
+            replacing_document: false,
         }
     }
     fn send(&mut self, job: Job) -> Result<()> {
         ensure!(!self.busy, "background operation in progress");
+        let replacing_document = matches!(&job, Job::New(..) | Job::Open(..) | Job::SaveAs(..));
         self.tx
             .try_send(job)
             .map_err(|_| anyhow::anyhow!("background queue unavailable"))?;
         self.busy = true;
+        self.replacing_document = replacing_document;
         Ok(())
     }
 }
@@ -229,6 +239,14 @@ pub struct App {
     search_from: usize,
     pending_find: bool,
     waveform: Vec<f32>,
+    asset_pending: Option<PathBuf>,
+    devices: audio::DeviceList,
+    record_format: String,
+    record_name: String,
+    scope_source: usize,
+    live_waveform: std::collections::VecDeque<f32>,
+    scope_peak: f32,
+    scope_samples: usize,
     pending_play: bool,
     cursor_seconds: f64,
     playback_range: Option<(f64, f64)>,
@@ -271,6 +289,10 @@ impl App {
             audition: false,
             show_tracks: config.appearance.show_tracks,
             show_console: config.appearance.show_console,
+            input: config.audio.input.clone(),
+            output: config.audio.output.clone(),
+            channels: config.audio.channels,
+            record_format: config.audio.format.clone(),
             config,
             palette,
             watcher,
@@ -290,15 +312,19 @@ impl App {
             history_index: 0,
             history: History::default(),
             last_evaluated,
-            input: None,
-            output: None,
             monitor: false,
-            channels: 1,
             search: String::new(),
             search_open: false,
             search_from: 0,
             pending_find: false,
             waveform: vec![],
+            asset_pending: None,
+            devices: audio::DeviceList::default(),
+            record_name: "take".into(),
+            scope_source: 0,
+            live_waveform: Default::default(),
+            scope_peak: 0.,
+            scope_samples: 0,
             pending_play: false,
             cursor_seconds: 0.,
             playback_range: None,
@@ -314,6 +340,8 @@ impl App {
         if let Some(warning) = warning {
             app.log(warning);
         }
+        app.refresh_devices();
+        app.queue_first_asset();
         match crate::timeline::Transport::load(&app.project.root) {
             Ok(state) => {
                 app.cursor_seconds = state.cursor;
@@ -323,6 +351,153 @@ impl App {
             Err(error) => app.log(format!("Transport preferences: {error:#}")),
         }
         app
+    }
+    fn queue_first_asset(&mut self) {
+        self.asset_pending = self
+            .preview
+            .as_ref()
+            .and_then(|score| score.tracks.iter().flat_map(|t| &t.clips).next())
+            .and_then(|clip| crate::codec::safe_path(&self.project.root, &clip.path).ok());
+    }
+    fn refresh_devices(&mut self) {
+        match audio::DeviceList::refresh() {
+            Ok(devices) => self.devices = devices,
+            Err(e) => self.log(format!("Audio device discovery: {e:#}")),
+        }
+    }
+    fn save_audio_preferences(&mut self) -> Result<()> {
+        let audio = crate::config::AudioPreferences {
+            input: self.input.clone(),
+            output: self.output.clone(),
+            channels: self.channels,
+            format: self.record_format.clone(),
+        };
+        let path = self
+            .watcher
+            .path
+            .as_ref()
+            .context("no configuration path available")?;
+        crate::config::save_audio(path, &audio)?;
+        self.config.audio = audio;
+        Ok(())
+    }
+    /// Apply deltas without touching document, editor memory, transport, or workers.
+    fn accept_config(&mut self, ctx: &egui::Context, config: Config) {
+        if config == self.config {
+            return;
+        }
+        if config.theme != self.config.theme
+            || config.appearance.font_size != self.config.appearance.font_size
+            || config.appearance.editor_font_size != self.config.appearance.editor_font_size
+        {
+            if let Err(e) = config.apply_changed(ctx, Some(&self.config)) {
+                self.log(format!("CONFIG: {e:#}"));
+                return;
+            }
+            self.palette = config.palette().expect("validated theme");
+        }
+        if config.appearance.show_tracks != self.config.appearance.show_tracks {
+            self.show_tracks = config.appearance.show_tracks;
+        }
+        if config.appearance.show_console != self.config.appearance.show_console {
+            self.show_console = config.appearance.show_console;
+        }
+        if config.language != self.config.language {
+            match crate::locale::Catalog::load(
+                &config.language.interface,
+                crate::phonetics::resource_root().as_deref(),
+            ) {
+                Ok(catalog) => self.catalog = catalog,
+                Err(e) => self.log(format!("Language resources: {e:#}")),
+            }
+            self.font_attempted = false;
+        }
+        if config.audio != self.config.audio {
+            self.input = config.audio.input.clone();
+            self.output = config.audio.output.clone();
+            self.channels = config.audio.channels;
+            self.record_format = config.audio.format.clone();
+        }
+        self.config = config;
+    }
+    fn audio_controls(&mut self, ui: &mut egui::Ui) {
+        egui::CollapsingHeader::new("Audio devices & recording")
+            .id_salt("audio-controls")
+            .show(ui, |ui| {
+                let before = (
+                    self.input.clone(),
+                    self.output.clone(),
+                    self.channels,
+                    self.record_format.clone(),
+                );
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(self.recording.is_none(), |ui| {
+                        device_combo(ui, "Input", &self.devices.inputs, &mut self.input);
+                    });
+                    ui.add_enabled_ui(self.recording.is_none() && self.playback.is_none(), |ui| {
+                        device_combo(ui, "Output", &self.devices.outputs, &mut self.output);
+                    });
+                    if ui.button("Refresh devices").clicked() {
+                        self.refresh_devices();
+                    }
+                });
+                ui.horizontal_wrapped(|ui| {
+                    ui.add_enabled_ui(self.recording.is_none() && self.finishing.is_none(), |ui| {
+                        egui::ComboBox::from_id_salt("record-channels")
+                            .selected_text(if self.channels == 1 { "Mono" } else { "Stereo" })
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.channels, 1, "Mono");
+                                ui.selectable_value(&mut self.channels, 2, "Stereo");
+                            });
+                        egui::ComboBox::from_id_salt("record-format")
+                            .selected_text(self.record_format.to_uppercase())
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.record_format, "wav".into(), "WAV");
+                                ui.selectable_value(&mut self.record_format, "flac".into(), "FLAC");
+                            });
+                        ui.checkbox(&mut self.monitor, "Monitor input (use headphones)");
+                        ui.label("Take name");
+                        ui.add(
+                            egui::TextEdit::singleline(&mut self.record_name).desired_width(120.),
+                        );
+                    });
+                    if self.recording.is_some() {
+                        if ui.button("Stop recording").clicked()
+                            && let Err(e) = self.command("record-stop")
+                        {
+                            self.log(format!("Recording: {e:#}"));
+                        }
+                    } else if ui
+                        .add_enabled(
+                            self.finishing.is_none()
+                                && self.bank_pending.is_none()
+                                && self.pending_record.is_none(),
+                            egui::Button::new("Record"),
+                        )
+                        .clicked()
+                    {
+                        let command =
+                            format!("record {:?} {}", self.record_name, self.record_format);
+                        if let Err(e) = self.command(&command) {
+                            self.log(format!("Recording: {e:#}"));
+                        }
+                    }
+                    if self.finishing.is_some() {
+                        ui.label("Finalizing take…");
+                    }
+                });
+                if before
+                    != (
+                        self.input.clone(),
+                        self.output.clone(),
+                        self.channels,
+                        self.record_format.clone(),
+                    )
+                    && let Err(e) = self.save_audio_preferences()
+                {
+                    self.log(format!("Audio preferences not saved: {e:#}"));
+                }
+            });
     }
     fn log(&mut self, s: impl Into<String>) {
         self.console.push(self.catalog.message(&s.into()));
@@ -718,19 +893,25 @@ impl App {
             }
             "input" => {
                 ensure!(self.recording.is_none(), "stop recording first");
-                self.input = Some(arg(1)?);
+                let name = arg(1)?;
+                self.input = (name != "default").then_some(name);
+                self.save_audio_preferences()?;
             }
             "output" => {
                 ensure!(
                     self.playback.is_none() && self.recording.is_none(),
                     "stop audio before changing output"
                 );
-                self.output = Some(arg(1)?);
+                let name = arg(1)?;
+                self.output = (name != "default").then_some(name);
+                self.save_audio_preferences()?;
             }
             "channels" => {
                 let n = arg(1)?.parse()?;
                 ensure!([1, 2].contains(&n), "channels must be 1 or 2");
+                ensure!(self.recording.is_none(), "stop recording first");
                 self.channels = n;
+                self.save_audio_preferences()?;
             }
             "monitor" => {
                 let value = arg(1)?;
@@ -832,7 +1013,9 @@ impl App {
             }
             "record" => {
                 ensure!(
-                    self.recording.is_none() && self.finishing.is_none(),
+                    self.recording.is_none()
+                        && self.finishing.is_none()
+                        && self.pending_record.is_none(),
                     "a take is recording or finalizing"
                 );
                 let score = language::parse(&self.project.source)?;
@@ -840,7 +1023,7 @@ impl App {
                     &self.project.root,
                     &audio::RecordingConfig {
                         name: &arg(1)?,
-                        format: v.get(2).map(String::as_str).unwrap_or("flac"),
+                        format: v.get(2).map(String::as_str).unwrap_or(&self.record_format),
                         rate: score.rate,
                         bits: score.bits,
                         channels: self.channels,
@@ -931,6 +1114,85 @@ impl App {
         Ok(())
     }
 }
+fn device_combo(ui: &mut egui::Ui, label: &str, names: &[String], selected: &mut Option<String>) {
+    let available = audio::DeviceList::available(names, selected.as_deref());
+    egui::ComboBox::from_id_salt(label)
+        .selected_text(format!(
+            "{label}: {}{}",
+            selected.as_deref().unwrap_or("System Default"),
+            if available { "" } else { " (unavailable)" }
+        ))
+        .show_ui(ui, |ui| {
+            ui.selectable_value(selected, None, "System Default");
+            for name in names {
+                ui.selectable_value(selected, Some(name.clone()), name);
+            }
+        });
+    if !available {
+        ui.small("Device unavailable; reconnect, refresh, or choose another device.");
+    }
+}
+fn compact_peaks(peaks: &[f32], bins: usize) -> Vec<f32> {
+    if peaks.is_empty() || bins == 0 {
+        return vec![];
+    }
+    let bins = bins.min(peaks.len());
+    (0..bins)
+        .map(|i| {
+            peaks[i * peaks.len() / bins..(i + 1) * peaks.len() / bins]
+                .iter()
+                .copied()
+                .fold(0f32, |a, b| a.max(b.abs()))
+        })
+        .collect()
+}
+fn renderer_peaks(renderer: &Renderer) -> Vec<f32> {
+    // Each clip contributes at most 256 bins, with a hard display bound.
+    let mut peaks = Vec::new();
+    for clip in renderer.tracks.iter().flat_map(|t| &t.clips).take(64) {
+        peaks.extend(compact_peaks(&clip.audio.waveform, 256));
+    }
+    compact_peaks(&peaks, 2048)
+}
+fn push_sample(
+    peaks: &mut std::collections::VecDeque<f32>,
+    peak: &mut f32,
+    count: &mut usize,
+    sample: [f32; 2],
+) {
+    *peak = (*peak).max(sample[0].abs().max(sample[1].abs()));
+    *count += 1;
+    if *count == 128 {
+        push_peak(peaks, *peak);
+        *count = 0;
+        *peak = 0.;
+    }
+}
+fn push_peak(peaks: &mut std::collections::VecDeque<f32>, peak: f32) {
+    if peaks.len() == 512 {
+        peaks.pop_front();
+    }
+    peaks.push_back(peak);
+}
+fn paint_peaks(ui: &mut egui::Ui, peaks: &[f32], height: f32, color: egui::Color32) -> egui::Rect {
+    let (rect, _) = ui.allocate_exact_size(
+        egui::vec2(ui.available_width(), height),
+        egui::Sense::hover(),
+    );
+    let peaks = compact_peaks(peaks, (rect.width() as usize).max(1));
+    for (i, peak) in peaks.iter().enumerate() {
+        let x = rect.left() + (i as f32 + 0.5) * rect.width() / peaks.len() as f32;
+        let y = peak.min(1.) * rect.height() * 0.45;
+        ui.painter().line_segment(
+            [
+                egui::pos2(x, rect.center().y - y),
+                egui::pos2(x, rect.center().y + y),
+            ],
+            egui::Stroke::new(1., color),
+        );
+    }
+    rect
+}
 fn highlight(text: &str, palette: Palette, size: f32) -> egui::text::LayoutJob {
     let mut job = egui::text::LayoutJob::default();
     for line in text.split_inclusive('\n') {
@@ -979,11 +1241,7 @@ impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _: &mut eframe::Frame) {
         if let Some(result) = self.watcher.poll() {
             match result {
-                Ok(config) => {
-                    self.config = config;
-                    self.theme_pending = true;
-                    self.log("Theme reloaded");
-                }
+                Ok(config) => self.accept_config(ctx, config),
                 Err(e) => self.log(format!("CONFIG: {e:#}; keeping current theme")),
             }
         }
@@ -1011,6 +1269,7 @@ impl eframe::App for App {
 
         if let Ok(reply) = self.work.rx.try_recv() {
             self.work.busy = false;
+            self.work.replacing_document = false;
             match reply {
                 Err(e) => {
                     self.pending_record = None;
@@ -1024,8 +1283,7 @@ impl eframe::App for App {
                     }
                     match self.watcher.load() {
                         Ok(config) => {
-                            self.config = config;
-                            self.theme_pending = true;
+                            self.accept_config(ctx, config);
                         }
                         Err(e) => self.log(format!("CONFIG: {e:#}")),
                     }
@@ -1057,6 +1315,7 @@ impl eframe::App for App {
                     }
                 }
                 Ok(Reply::Transport(r, source)) => {
+                    self.waveform = renderer_peaks(&r);
                     self.last_evaluated = source;
                     self.preview = Some(r.score.clone());
                     let result = self
@@ -1107,15 +1366,7 @@ impl eframe::App for App {
                 }
                 Ok(Reply::Prepared(r, source)) => {
                     let r = *r;
-                    self.waveform = r
-                        .tracks
-                        .iter()
-                        .flat_map(|t| {
-                            t.clips
-                                .iter()
-                                .flat_map(|c| c.audio.waveform.iter().copied())
-                        })
-                        .collect();
+                    self.waveform = renderer_peaks(&r);
                     self.last_evaluated = source;
                     let result = if let Some(p) = &mut self.playback {
                         p.replace(r)
@@ -1132,6 +1383,7 @@ impl eframe::App for App {
                         Err(e) => self.log(format!("ERROR: {e:#}")),
                     }
                 }
+                Ok(Reply::Waveform(peaks)) => self.waveform = peaks,
                 Ok(Reply::Drafted) => {}
                 Ok(Reply::Saved(s)) => {
                     if s == self.project.source {
@@ -1143,6 +1395,12 @@ impl eframe::App for App {
                 Ok(Reply::Project(p)) => {
                     self.studio = None;
                     self.project = p;
+                    self.waveform.clear();
+                    self.live_waveform.clear();
+                    self.scope_source = 0;
+                    self.preview = language::parse(&self.project.source).ok();
+                    self.preview_source = self.project.source.clone();
+                    self.queue_first_asset();
                     let state =
                         crate::timeline::Transport::load(&self.project.root).unwrap_or_default();
                     self.cursor_seconds = state.cursor;
@@ -1154,6 +1412,7 @@ impl eframe::App for App {
                     self.log("Project opened");
                 }
                 Ok(Reply::Imported(path)) => {
+                    self.asset_pending = Some(self.project.root.join(&path));
                     self.history.checkpoint(&self.project.source);
                     self.project.source.push_str(&format!(
                         "\ntrack imported{} {{\n import \"{path}\"\n}}\n",
@@ -1184,6 +1443,7 @@ impl eframe::App for App {
                 .and_then(|r| r);
             match result {
                 Ok(path) => {
+                    self.asset_pending = Some(path.clone());
                     if let Some((bank, capture)) = self.bank_capture.take() {
                         self.bank_pending = Some((bank, path, capture));
                         self.log("Take finalized; waiting for bank analysis worker");
@@ -1379,7 +1639,43 @@ impl eframe::App for App {
                 self.log(e.to_string());
             }
         }
+        if !self.work.busy
+            && let Some(path) = self.asset_pending.take()
+            && let Err(e) = self.work.send(Job::Waveform(self.project.clone(), path))
+        {
+            self.log(format!("Waveform: {e:#}"));
+        }
+        if let Some(playback) = &mut self.playback {
+            let mut count = 0;
+            while count < 8192 {
+                let Ok(sample) = playback.scope.pop() else {
+                    break;
+                };
+                count += 1;
+                if self.scope_source == 0 {
+                    push_sample(
+                        &mut self.live_waveform,
+                        &mut self.scope_peak,
+                        &mut self.scope_samples,
+                        sample,
+                    );
+                }
+            }
+            for _ in 0..64 {
+                let Ok(peaks) = playback.track_scope.pop() else {
+                    break;
+                };
+                if self.scope_source > 0 && self.scope_source <= 128 {
+                    push_peak(&mut self.live_waveform, peaks[self.scope_source - 1]);
+                }
+            }
+        } else {
+            self.live_waveform.clear();
+            self.scope_peak = 0.;
+            self.scope_samples = 0;
+        }
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
+            self.audio_controls(ui);
             ui.horizontal(|ui| {
                 ui.colored_label(self.palette.accent, "SONGBIRD");
                 ui.label(format!(
@@ -1607,45 +1903,28 @@ impl eframe::App for App {
                                 ui.separator();
                             }
                         }
-                        let waveform = self
-                            .studio
-                            .as_ref()
-                            .map_or(self.waveform.as_slice(), |v| v.waveform.as_slice());
-                        ui.label(self.catalog.text(if self.studio.is_some() {
-                            "Selected take waveform"
-                        } else {
-                            "Asset waveform peaks"
-                        }));
-                        let (rect, _) = ui.allocate_exact_size(
-                            egui::vec2(ui.available_width(), 100.),
-                            egui::Sense::hover(),
-                        );
-                        if !waveform.is_empty() {
-                            let p = ui.painter();
-                            let bins = (rect.width() as usize).max(1);
-                            for i in 0..bins {
-                                let start = i * waveform.len() / bins;
-                                let end = ((i + 1) * waveform.len() / bins)
-                                    .max(start + 1)
-                                    .min(waveform.len());
-                                let y = waveform[start..end]
-                                    .iter()
-                                    .copied()
-                                    .fold(0f32, f32::max)
-                                    .min(1.)
-                                    * rect.height()
-                                    * 0.45;
-                                let x = rect.left() + i as f32;
-                                p.line_segment(
-                                    [
-                                        egui::pos2(x, rect.center().y - y),
-                                        egui::pos2(x, rect.center().y + y),
-                                    ],
-                                    egui::Stroke::new(1.0_f32, self.palette.waveform),
-                                );
-                            }
-                        }
+                        egui::CollapsingHeader::new("Live waveform").default_open(true).show(ui, |ui| {
+                            let previous = self.scope_source;
+                            egui::ComboBox::from_id_salt("scope-source").selected_text(if self.scope_source == 0 { "Master output".into() } else { format!("Track {} (rendered peaks)", self.scope_source) }).show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.scope_source, 0, "Master output");
+                                if let Some(score) = &self.preview {
+                                    for (i, track) in score.tracks.iter().take(128).enumerate() {
+                                        ui.selectable_value(&mut self.scope_source, i + 1, &track.name);
+                                    }
+                                }
+                            });
+                            if previous != self.scope_source { self.live_waveform.clear(); self.scope_peak = 0.; self.scope_samples = 0; }
+                            let peaks: Vec<_> = self.live_waveform.iter().copied().collect();
+                            paint_peaks(ui, &peaks, 64., self.palette.waveform);
+                            if self.playback.is_none() { ui.small("Play to view actual output samples."); }
+                        });
+                        let waveform = self.studio.as_ref().map_or(self.waveform.as_slice(), |v| v.waveform.as_slice());
+                        let rect = egui::CollapsingHeader::new(if self.studio.is_some() { "Selected take waveform" } else { "Asset waveform peaks" }).default_open(true).show(ui, |ui| {
+                            if waveform.is_empty() { ui.small("No audio clip selected or evaluated. Synth audio appears in Live waveform."); }
+                            paint_peaks(ui, waveform, 100., self.palette.waveform)
+                        }).body_returned.unwrap_or(egui::Rect::NOTHING);
                         if let Some(view) = &self.studio
+                            && rect.is_positive()
                             && view.duration > 0.
                             && let Some(take) = view
                                 .session
@@ -1828,75 +2107,77 @@ impl eframe::App for App {
                     ctx.memory_mut(|m| m.request_focus(id));
                 }
             }
-            egui::ScrollArea::both().show(ui, |ui| {
-                let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _: f32| {
-                    ui.fonts_mut(|f| {
-                        f.layout_job(highlight(
-                            text.as_str(),
-                            self.palette,
-                            self.config.appearance.editor_font_size,
-                        ))
-                    })
-                };
-                let response = ui.add(
-                    egui::TextEdit::multiline(&mut self.project.source)
-                        .id(egui::Id::new("composition"))
-                        .code_editor()
-                        .interactive(!self.work.busy)
-                        .desired_width(f32::INFINITY)
-                        .desired_rows(35)
-                        .layouter(&mut layouter),
-                );
-                if response.changed() {
-                    self.dirty = true;
-                }
-                if response.has_focus()
-                    && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Space))
-                {
-                    let id = egui::Id::new("composition");
-                    if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
-                        && let Some(range) = state.cursor.char_range()
-                        && range.is_empty()
+            egui::ScrollArea::both()
+                .id_salt("composition-scroll")
+                .show(ui, |ui| {
+                    let mut layouter = |ui: &egui::Ui, text: &dyn egui::TextBuffer, _: f32| {
+                        ui.fonts_mut(|f| {
+                            f.layout_job(highlight(
+                                text.as_str(),
+                                self.palette,
+                                self.config.appearance.editor_font_size,
+                            ))
+                        })
+                    };
+                    let response = ui.add(
+                        egui::TextEdit::multiline(&mut self.project.source)
+                            .id(egui::Id::new("composition"))
+                            .code_editor()
+                            .interactive(!self.work.replacing_document)
+                            .desired_width(f32::INFINITY)
+                            .desired_rows(35)
+                            .layouter(&mut layouter),
+                    );
+                    if response.changed() {
+                        self.dirty = true;
+                    }
+                    if response.has_focus()
+                        && ui.input(|i| i.modifiers.ctrl && i.key_pressed(egui::Key::Space))
                     {
-                        let cursor = range.primary.index;
-                        let byte = self
-                            .project
-                            .source
-                            .char_indices()
-                            .nth(cursor)
-                            .map_or(self.project.source.len(), |(i, _)| i);
-                        let prefix_start = self.project.source[..byte]
-                            .char_indices()
-                            .rev()
-                            .find(|(_, c)| c.is_whitespace() || *c == '"')
-                            .map_or(0, |(i, c)| i + c.len_utf8());
-                        let prefix = &self.project.source[prefix_start..byte];
-                        let options = [
-                            "notation mini",
-                            "cycle 4",
-                            "cycles 4",
-                            "seed 42",
-                            "kick(3,8)",
-                            "hat(5,8,2)",
-                        ];
-                        if !prefix.is_empty()
-                            && let Some(value) =
-                                options.iter().find(|value| value.starts_with(prefix))
+                        let id = egui::Id::new("composition");
+                        if let Some(mut state) = egui::TextEdit::load_state(ctx, id)
+                            && let Some(range) = state.cursor.char_range()
+                            && range.is_empty()
                         {
-                            let position = self.project.source[..prefix_start].chars().count()
-                                + value.chars().count();
-                            self.project.source.replace_range(prefix_start..byte, value);
-                            state
-                                .cursor
-                                .set_char_range(Some(egui::text::CCursorRange::one(
-                                    egui::text::CCursor::new(position),
-                                )));
-                            state.store(ctx, id);
-                            self.dirty = true;
+                            let cursor = range.primary.index;
+                            let byte = self
+                                .project
+                                .source
+                                .char_indices()
+                                .nth(cursor)
+                                .map_or(self.project.source.len(), |(i, _)| i);
+                            let prefix_start = self.project.source[..byte]
+                                .char_indices()
+                                .rev()
+                                .find(|(_, c)| c.is_whitespace() || *c == '"')
+                                .map_or(0, |(i, c)| i + c.len_utf8());
+                            let prefix = &self.project.source[prefix_start..byte];
+                            let options = [
+                                "notation mini",
+                                "cycle 4",
+                                "cycles 4",
+                                "seed 42",
+                                "kick(3,8)",
+                                "hat(5,8,2)",
+                            ];
+                            if !prefix.is_empty()
+                                && let Some(value) =
+                                    options.iter().find(|value| value.starts_with(prefix))
+                            {
+                                let position = self.project.source[..prefix_start].chars().count()
+                                    + value.chars().count();
+                                self.project.source.replace_range(prefix_start..byte, value);
+                                state
+                                    .cursor
+                                    .set_char_range(Some(egui::text::CCursorRange::one(
+                                        egui::text::CCursor::new(position),
+                                    )));
+                                state.store(ctx, id);
+                                self.dirty = true;
+                            }
                         }
                     }
-                }
-            });
+                });
         });
         if self.dirty && !self.work.busy && self.draft_at.elapsed() > Duration::from_secs(5) {
             self.draft_at = Instant::now();
@@ -1982,4 +2263,94 @@ pub fn smoke(project: Project, bank: Option<String>) -> Result<()> {
         }),
     )
     .map_err(|e| anyhow::anyhow!("GUI smoke: {e}"))
+}
+
+#[cfg(test)]
+mod regression_tests {
+    use super::*;
+    #[test]
+    fn peaks_preserve_transients_and_stay_bounded() {
+        assert_eq!(compact_peaks(&[0., -0.9, 0.2, 0.4], 2), vec![0.9, 0.4]);
+        assert!(compact_peaks(&[], 100).is_empty());
+        assert_eq!(compact_peaks(&[0.5], 500), vec![0.5]);
+        let mut peaks = Default::default();
+        let (mut peak, mut count) = (0., 0);
+        for i in 0..128 * 1024 {
+            push_sample(
+                &mut peaks,
+                &mut peak,
+                &mut count,
+                [if i % 128 == 0 { -0.75 } else { 0. }, 0.25],
+            );
+        }
+        assert_eq!(peaks.len(), 512);
+        assert!(peaks.iter().all(|&v| v == 0.75));
+    }
+    #[test]
+    fn repeated_theme_deltas_preserve_editor_and_document() {
+        let ctx = egui::Context::default();
+        // No disk creation, microphone activation, or audio playback.
+        let mut app = App::new(Project {
+            root: PathBuf::from("/nonexistent-songbird-regression"),
+            source: DEFAULT.into(),
+        });
+        app.dirty = false;
+        app.theme_pending = false;
+        app.project.source.push_str("\n# unsaved typing");
+        let source = app.project.source.clone();
+        let preview_source = app.preview_source.clone();
+        let id = egui::Id::new("composition");
+        let range =
+            egui::text::CCursorRange::two(egui::text::CCursor::new(2), egui::text::CCursor::new(8));
+        let mut state = egui::text_edit::TextEditState::default();
+        state.cursor.set_char_range(Some(range));
+        let mut undoer = state.undoer();
+        undoer.feed_state(0., &(range, "before".into()));
+        undoer.feed_state(2., &(range, source.clone()));
+        state.set_undoer(undoer);
+        state.store(&ctx, id);
+        ctx.memory_mut(|m| m.request_focus(id));
+        let scroll_id = egui::Id::new("composition-scroll-test");
+        let mut scroll = egui::scroll_area::State::load(&ctx, scroll_id).unwrap_or_default();
+        scroll.offset = egui::vec2(12., 80.);
+        scroll.store(&ctx, scroll_id);
+        app.font_attempted = true;
+        app.work.busy = true; // e.g. automatic draft save
+        for color in ["#112233", "#223344", "#112233"] {
+            let mut config = app.config.clone();
+            config.theme.accent = Some(color.into());
+            app.accept_config(&ctx, config.clone());
+            app.accept_config(&ctx, config);
+            assert_eq!(app.project.source, source);
+            assert_eq!(app.preview_source, preview_source);
+            assert!(app.font_attempted);
+            assert!(!app.work.replacing_document);
+            assert_eq!(ctx.memory(|m| m.focused()), Some(id));
+            let state = egui::TextEdit::load_state(&ctx, id).unwrap();
+            assert_eq!(state.cursor.char_range(), Some(range));
+            assert!(state.undoer().has_undo(&(range, source.clone())));
+            assert_eq!(
+                egui::scroll_area::State::load(&ctx, scroll_id)
+                    .unwrap()
+                    .offset,
+                scroll.offset
+            );
+        }
+    }
+    #[test]
+    fn recording_controls_require_explicit_start_and_preserve_idle_state() {
+        let mut app = App::new(Project {
+            root: PathBuf::from("/nonexistent-songbird-regression"),
+            source: DEFAULT.into(),
+        });
+        assert!(!app.monitor);
+        assert!(app.recording.is_none() && app.finishing.is_none());
+        assert!(app.command("record-stop").is_err());
+        app.command("monitor on").unwrap();
+        assert!(app.monitor && app.recording.is_none());
+        app.command("monitor off").unwrap();
+        app.pending_record = Some(("take".into(), "wav".into(), 0., 1.));
+        assert!(app.command("record take wav").is_err());
+        assert!(app.recording.is_none());
+    }
 }

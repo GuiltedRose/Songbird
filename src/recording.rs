@@ -2,7 +2,7 @@
 use crate::audio::Meters;
 use serde::Deserialize;
 use std::sync::{Arc, atomic::Ordering};
-#[derive(Clone, Debug, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Settings {
     pub latency_ms: f64,
@@ -89,7 +89,7 @@ use std::{fs, path::Path};
 struct LoopSpans {
     spans: Vec<(f64, f64)>,
 }
-#[derive(Clone, Debug, Serialize, Deserialize)]
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 pub struct Take {
     pub id: u32,
     pub file: String,

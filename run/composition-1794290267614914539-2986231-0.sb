@@ -1,0 +1,30 @@
+project "Midnight Garden"
+tempo 140
+signature 4/4
+bars 8
+rate 48000
+bits 24
+let bassline "(C2 - C2 G2) (Bb2 - G2 -)"
+track drums {
+ instrument "drumkit"
+ pattern "kick hat snare hat kick kick snare hat"
+ gain -9db
+ loop
+}
+track bass {
+ synth "analog"
+ notes $bassline
+ adsr 0.008 0.15 0.45 0.08
+ filter 900
+ gain -8db
+ loop
+}
+track melody {
+ synth "triangle"
+ notes "[C4,E4,G4]:1 -:1 [Bb3,D4,F4]:1 G4:1"
+ gain -9db
+ reverb 0.2
+ pan 0.15
+ loop
+}
+master limit -1
