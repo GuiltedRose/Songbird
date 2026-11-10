@@ -116,3 +116,26 @@ text. The main strip shows bar/beat and tenths of seconds rather than rapidly
 changing ticks; remaining time uses whole seconds. Numeric input/output levels
 hold each interval's maximum peak. Waveforms and progress movement keep their
 normal refresh rate; audio clocks and scheduling are unchanged.
+
+## Formatted in-app documentation
+
+Press **F1** or **Help** to read the embedded guides as formatted Markdown:
+headings, emphasis, lists, tables, quotations, inline code, and fenced code blocks.
+Text can be selected; **Copy** on a code block copies its original contents without
+running commands. Topic navigation and documentation search remain available.
+Local links to bundled guides and their heading anchors stay inside Help. References
+that are not bundled show a notice. HTTP/HTTPS links open in the default browser
+only when clicked. No images, remote content, scripts, or HTML are loaded.
+
+The renderer follows the application theme and font size. Parsed document blocks
+are cached until the selected topic changes, and each topic retains its own scroll
+position. This is a renderer for the Markdown used by the bundled guides, not a
+complete CommonMark/HTML browser. No additional dependency or network service is
+required.
+
+After building, check F1 at normal and narrow window widths: headings and paragraphs
+should wrap, code/table regions should scroll horizontally, Copy should preserve
+code indentation, and links such as First Voicebank → device setup should navigate
+to the linked guide heading. Check selection, search, topic switching, and both
+light/dark themes. Automated parser/link and headless layout tests are included;
+they still need the operator's test run.

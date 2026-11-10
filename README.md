@@ -430,3 +430,8 @@ outside the audio callback. Slow GUI frames may drop visualization data only.
 See [recording settings](docs/RECORDING.md#configuration-settings) for the TOML
 fields and [operator validation and rollback](docs/OPERATIONS.md#gui-fix-validation-and-rollback)
 for the commands to run before using this change.
+
+The in-app **Help** window renders the bundled Markdown guides with formatted
+headings, lists, tables, selectable text, and copyable code blocks. Embedded guide
+links stay inside Songbird; documentation remains available offline. See
+[formatted help](docs/EDITING.md#formatted-in-app-documentation).
