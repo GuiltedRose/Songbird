@@ -1,7 +1,9 @@
 # Voicebanks and vocal presets
 
-Start with [Creating Your First Voicebank](FIRST_VOICEBANK.md) for the complete
-record → prepare → validate → preview → compose workflow. Voicebank Studio runs
+New to voicebanks? Start with [Creating Your First Voicebank](FIRST_VOICEBANK.md).
+It assumes no music/audio knowledge, explains the terms, walks through the GUI and
+necessary commands, and builds your first “me see” from three recorded sounds.
+This page is the command and file-format reference for later use. Voicebank Studio runs
 inside Songbird's prompt and right-hand panel. File decoding, analysis and preview
 preparation run on its background worker; audio callbacks do not perform this work.
 

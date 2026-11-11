@@ -139,3 +139,10 @@ code indentation, and links such as First Voicebank → device setup should navi
 to the linked guide heading. Check selection, search, topic switching, and both
 light/dark themes. Automated parser/link and headless layout tests are included;
 they still need the operator's test run.
+
+Voicebank Studio's existing sidebar also includes **Voicebank tools**: a **Sound**
+dropdown, **Take** dropdown, **Next missing sound**, original/trimmed listening,
+**Re-analyze**, **Use selected take**, and **Beginner guide**. These use the same
+validated Studio commands as the prompt; publication remains explicit and source
+takes remain preserved. Controls disable during capture/finalization/background
+operations. They do not replace or reset the composition editor.

@@ -441,3 +441,9 @@ started bank recording: detected note/Hz, optional target and cents guidance,
 level/clipping feedback, and a bounded pitch-stability trace. The selected take's
 measured root can be applied explicitly before publishing. See
 [live pitch coaching](docs/FIRST_VOICEBANK.md#live-pitch-coach-and-voice-practice).
+
+New to recording or singing software? [Create your first voicebank](docs/FIRST_VOICEBANK.md)
+starts from zero: project folders, microphone selection, sound labels, note/Hz and
+trim explanations, then three recordings that sing “me see.” Studio's sidebar
+provides sound/take dropdowns, original/trimmed replay, re-analysis, and explicit
+**Use selected take** publication without replacing the composition editor.

@@ -373,6 +373,52 @@ impl App {
             .and_then(|score| score.tracks.iter().flat_map(|t| &t.clips).next())
             .and_then(|clip| crate::codec::safe_path(&self.project.root, &clip.path).ok());
     }
+    fn voicebank_tools(&mut self, ui: &mut egui::Ui) -> Option<Vec<String>> {
+        let mut action = None;
+        ui.heading("Voicebank tools");
+        if ui.small_button("Beginner guide").clicked() {
+            self.help.topic = "voicebank".into();
+            self.help.open = true;
+        }
+        let idle = !self.work.busy
+            && self.recording.is_none()
+            && self.finishing.is_none()
+            && self.bank_capture.is_none()
+            && self.bank_pending.is_none();
+        if let Some(view) = &self.studio {
+            ui.add_enabled_ui(idle, |ui| {
+                let mut target = view.session.target.clone();
+                egui::ComboBox::from_id_salt("bank-target").selected_text(format!("Sound: {target}")).show_ui(ui, |ui| {
+                    for phone in &view.phones {
+                        ui.selectable_value(&mut target, phone.id.clone(), format!("{} — {}", phone.id, phone.description));
+                    }
+                });
+                if target != view.session.target { action = Some(vec!["target".into(), target]); }
+                if ui.button("Next missing sound").on_hover_text("Choose a missing sound for the current bank language and recording profile").clicked() {
+                    action = Some(vec!["guide".into(), "next".into()]);
+                }
+                let mut selected = view.session.selected;
+                egui::ComboBox::from_id_salt("bank-take").selected_text(selected.map_or("Take: none".into(), |i| format!("Take {}", i + 1))).show_ui(ui, |ui| {
+                    for (i, take) in view.session.takes.iter().enumerate() {
+                        ui.selectable_value(&mut selected, Some(i), format!("{} — {}", i + 1, take.capture.phoneme));
+                    }
+                });
+                if selected != view.session.selected && let Some(i) = selected { action = Some(vec!["take".into(), (i + 1).to_string()]); }
+                ui.add_enabled_ui(view.session.selected.is_some(), |ui| {
+                    ui.horizontal_wrapped(|ui| {
+                        if ui.button("Listen original").clicked() { action = Some(vec!["replay".into(), "raw".into()]); }
+                        if ui.button("Listen trimmed").clicked() { action = Some(vec!["replay".into()]); }
+                        if ui.button("Re-analyze").on_hover_text("Refresh measurements without replacing your manual edits").clicked() { action = Some(vec!["analyze".into()]); }
+                    });
+                    if ui.button("Use selected take").on_hover_text("Validate and publish this take into the playable bank. A matching mapping may be replaced; original takes are retained.").clicked() {
+                        action = Some(vec!["use".into()]);
+                    }
+                });
+            });
+        }
+        ui.separator();
+        action
+    }
     fn pitch_coach(&mut self, ui: &mut egui::Ui) -> Option<Vec<String>> {
         let mut action = None;
         egui::CollapsingHeader::new("Pitch coach").default_open(true).show(ui, |ui| {
@@ -1918,7 +1964,11 @@ impl eframe::App for App {
                 .default_width(220.)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
-                        if self.studio.is_some() { studio_action = self.pitch_coach(ui); }
+                        if self.studio.is_some() {
+                            let tools_action = self.voicebank_tools(ui);
+                            let coach_action = self.pitch_coach(ui);
+                            studio_action = tools_action.or(coach_action);
+                        }
                         if let Some(view) = &self.studio {
                             ui.heading(self.catalog.text("Voicebank Studio"));
                             ui.label(&view.name);

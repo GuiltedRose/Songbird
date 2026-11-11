@@ -377,3 +377,14 @@ install -m 755 "$HOME/.local/bin/songbird.before-pitch-coach" "$HOME/.local/bin/
 All recordings and existing bank metadata remain in place; there is no schema
 migration or automatic publication to undo. Root edits made explicitly by the
 operator remain saved, as with the existing root-edit command.
+
+## Beginner Studio controls acceptance
+
+Use the validation/build/install/rollback commands above; no new dependency,
+service, or host setting is required for these sidebar helpers. With a practice
+project, check F1 → Create your first voicebank, then follow its three-sound
+walkthrough. Verify Sound/Take selection, Next missing sound, original/trimmed
+replay, Re-analyze preserving manual edits, and explicit Use validation. Confirm
+controls disable during capture/finalization and the main editor's unsaved text,
+selection, and focus are unaffected by background operations. Beginner guide
+opens the embedded tutorial. GUI acceptance has not been run by the implementer.
