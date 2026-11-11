@@ -435,3 +435,9 @@ The in-app **Help** window renders the bundled Markdown guides with formatted
 headings, lists, tables, selectable text, and copyable code blocks. Embedded guide
 links stay inside Songbird; documentation remains available offline. See
 [formatted help](docs/EDITING.md#formatted-in-app-documentation).
+
+Voicebank Studio also includes an offline **Pitch coach** during explicitly
+started bank recording: detected note/Hz, optional target and cents guidance,
+level/clipping feedback, and a bounded pitch-stability trace. The selected take's
+measured root can be applied explicitly before publishing. See
+[live pitch coaching](docs/FIRST_VOICEBANK.md#live-pitch-coach-and-voice-practice).

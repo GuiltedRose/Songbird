@@ -327,3 +327,53 @@ config did not previously exist, keep it or move it into the backup directory
 instead of deleting it. Never remove projects, recordings, cache leases in use,
 voicebanks, or take indexes as part of application rollback. For interrupted
 recordings use the existing `recover-take` workflow in this guide.
+
+## Pitch coach acceptance
+
+No additional packages, permissions, service activation, or network access are
+needed beyond the existing audio/desktop prerequisites. Close Songbird before
+building and installing. Run from the checkout:
+
+```sh
+cargo fmt --check
+cargo test --locked
+cargo clippy --locked --all-targets -- -D warnings
+cargo build --release --locked
+./target/release/songbird gui-smoke examples/voicebank-studio
+# Preserve the currently installed executable before updating it.
+cp -p "$HOME/.local/bin/songbird" "$HOME/.local/bin/songbird.before-pitch-coach"
+install -m 755 target/release/songbird "$HOME/.local/bin/songbird"
+cmp target/release/songbird "$HOME/.local/bin/songbird"
+"$HOME/.local/bin/songbird" examples/voicebank-studio
+```
+
+If Songbird was never installed, skip the executable backup and launch directly
+from `target/release/songbird`. The new tuner/parser tests are written but were
+not executed during implementation. Hardware, latency, tracking quality, and
+sustained playback/recording performance remain operator checks:
+
+1. Open a test bank, enable the live tuner and explicitly record a short held vowel.
+   Confirm detected note/Hz, cent direction, target selection, levels, and history.
+   Use an independently known reference near 220/440 Hz; check several pitches and
+   your actual device rates, including 44.1/48 kHz. Expect no note for silence or
+   unvoiced consonants and a warning/withheld pitch for clipping. Check octave errors.
+2. Stop/finalize. Confirm input stops, the original take remains playable, and the
+   measured root can be reviewed. Set a manual root, run `voicebank analyze`, and
+   verify it stays unchanged. Click **Apply measured root** only when satisfied;
+   verify trims/range/audio and published bank samples remain unchanged until Use.
+3. Record with the tuner enabled/disabled during backing playback. Compare recording
+   drops, output underruns, and captured audio quality. Check Stop, device loss,
+   repeated short captures, quiet input, noise, and target changes. A skipped-tuner
+   counter must not suppress a genuine recording overrun or device error.
+4. Repeat on each supported desktop platform before claiming cross-platform tuner
+   acceptance. Earlier build/audio confirmations predate this feature.
+
+To roll back, close Songbird normally, then restore only the saved executable:
+
+```sh
+install -m 755 "$HOME/.local/bin/songbird.before-pitch-coach" "$HOME/.local/bin/songbird"
+```
+
+All recordings and existing bank metadata remain in place; there is no schema
+migration or automatic publication to undo. Root edits made explicitly by the
+operator remain saved, as with the existing root-edit command.

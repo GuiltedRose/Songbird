@@ -17,8 +17,19 @@ pub struct Analysis {
     pub voiced: Option<bool>,
     pub warnings: Vec<String>,
 }
+impl Analysis {
+    /// A measurement for explicit review; this never updates sample metadata.
+    pub fn suggested_root(&self) -> Option<f64> {
+        self.root.filter(|hz| {
+            hz.is_finite()
+                && (40.0..=2000.).contains(hz)
+                && self.confidence.is_finite()
+                && self.confidence >= 0.75
+        })
+    }
+}
 /// YIN cumulative-mean normalized difference, followed by parabolic lag refinement.
-fn pitch(x: &[f32], rate: f64) -> Option<(f64, f64)> {
+pub(crate) fn pitch(x: &[f32], rate: f64) -> Option<(f64, f64)> {
     let max = (rate / 40.).ceil() as usize;
     let min = (rate / 2000.).floor().max(2.) as usize;
     if x.len() <= max * 2 {

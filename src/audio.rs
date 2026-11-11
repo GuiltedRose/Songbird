@@ -477,6 +477,7 @@ fn input<T: cpal::SizedSample + cpal::Sample>(
     mut monitor: Option<rtrb::Producer<[f32; 2]>>,
     s: Arc<Meters>,
     gate: Option<crate::recording::Gate>,
+    mut tuner: Option<crate::tuner::CaptureTap>,
 ) -> Result<cpal::Stream>
 where
     f32: cpal::FromSample<T>,
@@ -498,6 +499,9 @@ where
                     frame[ch - 1].to_sample::<f32>(),
                 ];
                 s.update(x);
+                if let Some(tuner) = &mut tuner {
+                    tuner.push(x);
+                }
                 if let Some(m) = &mut monitor {
                     let _ = m.push(x);
                 }
@@ -552,6 +556,7 @@ impl Drop for RecordingDone {
     }
 }
 pub struct Recording {
+    pub tuner: Option<crate::tuner::LiveTuner>,
     stream: Option<cpal::Stream>,
     monitor: Option<cpal::Stream>,
     worker: Option<JoinHandle<Result<PathBuf>>>,
@@ -572,6 +577,16 @@ pub struct RecordingConfig<'a> {
 }
 impl Recording {
     pub fn start(root: &Path, settings: &RecordingConfig<'_>) -> Result<Self> {
+        Self::start_impl(root, settings, false)
+    }
+    pub fn start_with_tuner(root: &Path, settings: &RecordingConfig<'_>) -> Result<Self> {
+        Self::start_impl(root, settings, true)
+    }
+    fn start_impl(
+        root: &Path,
+        settings: &RecordingConfig<'_>,
+        analyze_pitch: bool,
+    ) -> Result<Self> {
         let RecordingConfig {
             name,
             format,
@@ -607,22 +622,58 @@ impl Recording {
         } else {
             (None, None)
         };
+        let (tuner_tx, tuner) = if analyze_pitch {
+            let (tx, tuner) = crate::tuner::LiveTuner::start(rate)?;
+            (Some(tx), Some(tuner))
+        } else {
+            (None, None)
+        };
         let stream = match f {
-            cpal::SampleFormat::F32 => {
-                input::<f32>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
-            }
-            cpal::SampleFormat::I16 => {
-                input::<i16>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
-            }
-            cpal::SampleFormat::U16 => {
-                input::<u16>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
-            }
-            cpal::SampleFormat::I32 => {
-                input::<i32>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
-            }
-            cpal::SampleFormat::F64 => {
-                input::<f64>(&d, &c, tx, monitor_tx, state.clone(), gate.cloned())?
-            }
+            cpal::SampleFormat::F32 => input::<f32>(
+                &d,
+                &c,
+                tx,
+                monitor_tx,
+                state.clone(),
+                gate.cloned(),
+                tuner_tx,
+            )?,
+            cpal::SampleFormat::I16 => input::<i16>(
+                &d,
+                &c,
+                tx,
+                monitor_tx,
+                state.clone(),
+                gate.cloned(),
+                tuner_tx,
+            )?,
+            cpal::SampleFormat::U16 => input::<u16>(
+                &d,
+                &c,
+                tx,
+                monitor_tx,
+                state.clone(),
+                gate.cloned(),
+                tuner_tx,
+            )?,
+            cpal::SampleFormat::I32 => input::<i32>(
+                &d,
+                &c,
+                tx,
+                monitor_tx,
+                state.clone(),
+                gate.cloned(),
+                tuner_tx,
+            )?,
+            cpal::SampleFormat::F64 => input::<f64>(
+                &d,
+                &c,
+                tx,
+                monitor_tx,
+                state.clone(),
+                gate.cloned(),
+                tuner_tx,
+            )?,
             _ => bail!("unsupported input sample format {f}"),
         };
         let s = state.clone();
@@ -700,6 +751,7 @@ impl Recording {
             }
         });
         let recording = Self {
+            tuner,
             stream: Some(stream),
             monitor,
             worker: Some(worker),
@@ -726,6 +778,7 @@ impl Recording {
         self.state.stopped.store(true, Ordering::Relaxed);
         self.stream.take();
         self.monitor.take();
+        self.tuner.take();
         self.worker.take().unwrap()
     }
 }
@@ -763,6 +816,7 @@ mod transport_tests {
         let state = Arc::new(Meters::default());
         let worker_state = state.clone();
         let recording = Recording {
+            tuner: None,
             stream: None,
             monitor: None,
             state: state.clone(),

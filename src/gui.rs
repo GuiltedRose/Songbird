@@ -208,6 +208,9 @@ pub struct App {
     help: crate::help::Help,
     font_attempted: bool,
     studio: Option<StudioView>,
+    tuner_enabled: bool,
+    tuner_target_enabled: bool,
+    tuner_target: i32,
     bank_capture: Option<(String, Capture)>,
     bank_pending: Option<(String, PathBuf, Capture)>,
     audition: bool,
@@ -288,6 +291,9 @@ impl App {
             help: Default::default(),
             font_attempted: false,
             studio: None,
+            tuner_enabled: true,
+            tuner_target_enabled: false,
+            tuner_target: 57,
             bank_capture: None,
             bank_pending: None,
             audition: false,
@@ -366,6 +372,57 @@ impl App {
             .as_ref()
             .and_then(|score| score.tracks.iter().flat_map(|t| &t.clips).next())
             .and_then(|clip| crate::codec::safe_path(&self.project.root, &clip.path).ok());
+    }
+    fn pitch_coach(&mut self, ui: &mut egui::Ui) -> Option<Vec<String>> {
+        let mut action = None;
+        egui::CollapsingHeader::new("Pitch coach").default_open(true).show(ui, |ui| {
+            ui.add_enabled_ui(self.recording.is_none(), |ui| {
+                ui.checkbox(&mut self.tuner_enabled, "Live tuner while recording");
+            });
+            ui.checkbox(&mut self.tuner_target_enabled, "Use a target note");
+            if self.tuner_target_enabled {
+                ui.add(egui::Slider::new(&mut self.tuner_target, 28..=95).text("Target").custom_formatter(|n, _| crate::tuner::note_name(n.round() as i32)));
+                ui.small(format!("{} · {:.1} Hz (A4 = 440 Hz)", crate::tuner::note_name(self.tuner_target), crate::dsp::hz(self.tuner_target as f64)));
+            }
+            ui.small("Choose a comfortable target. Pitch is one aspect of voice; no gender target is assigned.");
+            let reading = self.recording.as_ref().filter(|_| self.bank_capture.is_some())
+                .and_then(|r| r.tuner.as_ref()).and_then(crate::tuner::LiveTuner::reading);
+            if let Some(reading) = reading {
+                if let Some(hz) = reading.hz {
+                    let note = crate::tuner::nearest_note(hz);
+                    ui.monospace(format!("{} · {hz:.1} Hz", crate::tuner::note_name(note)));
+                    let reference = if self.tuner_target_enabled { self.tuner_target } else { note };
+                    let cents = crate::tuner::cents(hz, crate::dsp::hz(reference as f64));
+                    let direction = if cents.abs() <= 10. { "In tune" } else if cents < 0. { "Flat" } else { "Sharp" };
+                    ui.monospace(format!("{direction} · {cents:+.0} cents"));
+                    ui.small(if self.tuner_target_enabled { "Compared with your target note" } else { "Compared with the nearest note" });
+                } else if reading.clipped { ui.label("Clipped input — lower recording gain"); }
+                else { ui.label("Unvoiced / uncertain pitch"); }
+                ui.small(format!("Periodicity {:.0}% · RMS {:.0} dB · peak {:.0} dB", reading.confidence * 100., reading.rms_db, 20. * reading.peak.max(1e-6).log10()));
+                if let Some(stability) = reading.stability_cents { ui.small(format!("Recent pitch spread: {stability:.0} cents SD")); }
+                else { ui.small("Hold a comfortable voiced sound to measure stability"); }
+                let reference = if self.tuner_target_enabled { Some(crate::dsp::hz(self.tuner_target as f64)) } else { reading.hz.map(|hz| crate::dsp::hz(crate::tuner::nearest_note(hz) as f64)) };
+                pitch_history(ui, &reading.history, reference, self.palette.waveform);
+                if reading.dropped > 0 { ui.small(format!("Tuner skipped {} samples; recording is independent", reading.dropped)); }
+            } else if self.bank_capture.is_some() && self.recording.is_some() {
+                ui.small("Waiting for fresh pitch analysis. Silence and unvoiced consonants may have no note.");
+            } else { ui.small("Record a bank take to see pitch. Silence and unvoiced consonants may have no note."); }
+            if self.bank_capture.is_some() && self.recording.is_some() {
+                if ui.button("Stop bank recording").clicked() { action = Some(vec!["record-stop".into()]); }
+            } else if ui.add_enabled(self.recording.is_none() && self.finishing.is_none() && self.bank_pending.is_none() && !self.work.busy,
+                egui::Button::new("Record bank target")).clicked() { action = Some(vec!["record".into()]); }
+            if let Some(take) = self.studio.as_ref().and_then(|v| v.session.selected.and_then(|i| v.session.takes.get(i))) {
+                if let Some(hz) = take.analysis.suggested_root() {
+                    ui.small(format!("Measured root: {} · {hz:.1} Hz", crate::tuner::note_name(crate::tuner::nearest_note(hz))));
+                    if ui.add_enabled(self.recording.is_none() && self.finishing.is_none() && self.bank_pending.is_none() && !self.work.busy,
+                        egui::Button::new("Apply measured root")).on_hover_text("Explicitly replaces only the selected take's root frequency. Original audio and published samples are unchanged.").clicked() {
+                        action = Some(vec!["set".into(), "root".into(), format!("{hz:.8}")]);
+                    }
+                }
+            }
+            ui.separator();
+        });
+        action
     }
     fn refresh_devices(&mut self) {
         match audio::DeviceList::refresh() {
@@ -617,7 +674,12 @@ impl App {
                 &self.project.root,
                 &format!("{}/voicebank.toml", view.bank),
             )?;
-            self.recording = Some(Recording::start(
+            let start = if self.tuner_enabled {
+                Recording::start_with_tuner
+            } else {
+                Recording::start
+            };
+            self.recording = Some(start(
                 manifest.parent().unwrap(),
                 &audio::RecordingConfig {
                     name: "phoneme",
@@ -1120,6 +1182,43 @@ impl App {
             .save(&self.project.root)?;
         }
         Ok(())
+    }
+}
+fn pitch_history(
+    ui: &mut egui::Ui,
+    history: &std::collections::VecDeque<Option<f64>>,
+    reference: Option<f64>,
+    color: egui::Color32,
+) {
+    ui.small("Recent pitch · ±100 cents (out-of-range values reach the edge)");
+    let (rect, _) =
+        ui.allocate_exact_size(egui::vec2(ui.available_width(), 64.), egui::Sense::hover());
+    ui.painter().line_segment(
+        [
+            egui::pos2(rect.left(), rect.center().y),
+            egui::pos2(rect.right(), rect.center().y),
+        ],
+        egui::Stroke::new(1.0_f32, ui.visuals().weak_text_color()),
+    );
+    let Some(reference) = reference else {
+        return;
+    };
+    let mut previous = None;
+    for (i, hz) in history.iter().enumerate() {
+        let point = hz.map(|hz| {
+            egui::pos2(
+                rect.right() - (history.len() - 1 - i) as f32 / 59. * rect.width(),
+                rect.center().y
+                    - (crate::tuner::cents(hz, reference) / 100.).clamp(-1., 1.) as f32
+                        * rect.height()
+                        * 0.45,
+            )
+        });
+        if let (Some(a), Some(b)) = (previous, point) {
+            ui.painter()
+                .line_segment([a, b], egui::Stroke::new(1.0_f32, color));
+        }
+        previous = point;
     }
 }
 fn device_combo(ui: &mut egui::Ui, label: &str, names: &[String], selected: &mut Option<String>) {
@@ -1812,12 +1911,14 @@ impl eframe::App for App {
                 }
             });
         });
+        let mut studio_action = None;
         if self.show_tracks {
             egui::SidePanel::right("tracks")
                 .resizable(true)
                 .default_width(220.)
                 .show(ctx, |ui| {
                     egui::ScrollArea::vertical().show(ui, |ui| {
+                        if self.studio.is_some() { studio_action = self.pitch_coach(ui); }
                         if let Some(view) = &self.studio {
                             ui.heading(self.catalog.text("Voicebank Studio"));
                             ui.label(&view.name);
@@ -2064,6 +2165,11 @@ impl eframe::App for App {
                 }
             });
         });
+        if let Some(args) = studio_action
+            && let Err(e) = self.voicebank_command(&args)
+        {
+            self.log(format!("Voicebank: {e:#}"));
+        }
         if self.show_console {
             egui::TopBottomPanel::bottom("console")
                 .resizable(true)

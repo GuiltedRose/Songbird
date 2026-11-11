@@ -638,3 +638,33 @@ fn syllable_only_bank_can_extend_its_vowel_into_a_melisma() {
     assert_eq!(r.tracks[0].units.len(), 2);
     assert!(r.tracks[0].units[1].sustain_only);
 }
+
+#[test]
+fn root_measurement_needs_explicit_application_and_keeps_other_metadata() {
+    let fixture = Fixture::new();
+    let mut bank = fixture.populated();
+    bank.session.selected = Some(1); // IY
+    bank.session.takes[1].root = Some(233.);
+    bank.save().unwrap();
+    bank.analyze().unwrap();
+    assert_eq!(bank.session.takes[1].root, Some(233.));
+    let hz = bank.session.takes[1].analysis.suggested_root().unwrap();
+    let file = bank.session.takes[1].file.clone();
+    let onset = bank.session.takes[1].onset;
+    let result = fixture
+        .command(Some("voices/nova"), &["set", "root", &hz.to_string()])
+        .unwrap();
+    let take = &result.view.session.takes[1];
+    assert!((take.root.unwrap() - 220.).abs() < 2.);
+    assert_eq!(take.file, file);
+    assert_eq!(take.onset, onset);
+    // Publishing is separate: the existing playable phoneme root is untouched.
+    let published = Studio::open(&fixture.dir, "voices/nova").unwrap();
+    assert_eq!(published.meta.samples[1].root, 220.);
+    let mut report = take.analysis.clone();
+    report.confidence = 0.;
+    assert!(report.suggested_root().is_none());
+    report.confidence = 1.;
+    report.root = Some(f64::NAN);
+    assert!(report.suggested_root().is_none());
+}

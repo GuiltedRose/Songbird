@@ -277,3 +277,55 @@ The [included engineering example](../examples/voicebank-studio/README.md) lets
 you explore the interface with generated M/IY/S material. It is not a human singer
 or evidence of complete, intelligible English singing. Final listening and
 microphone/device acceptance require your own authorized recordings and hardware.
+
+## Live pitch coach and voice practice
+
+Open/create a bank and show the Tracks panel to see **Pitch coach**. **Live tuner
+while recording** enables analysis for the next bank capture. Click **Record bank
+target** (or use `voicebank record`), then **Stop bank recording** when finished.
+No microphone is opened by viewing the coach or starting Songbird. Monitoring
+remains independently controlled and off by default. Practice takes are real bank
+recordings: they are preserved and analyzed through the normal take workflow.
+Keep bank takes within the existing 30-second analysis limit.
+
+The coach displays the detected note, frequency in Hz, cents flat/sharp relative
+to the nearest equal-tempered note, input RMS/peak levels, clipping, and tracking
+periodicity. Turn on **Use a target note** to choose your own reference instead
+(A4 = 440 Hz; targets E1–B6). Within ±10 cents is displayed as “In tune”; this is
+an informational display tolerance, not an automatic correction. Choose targets
+that are comfortable for you. No target or score assigns a gender to your voice.
+Pitch is one aspect of voice; this first version does not measure resonance,
+formants, gender, vocal health, or pronunciation.
+
+A short trace shows up to 60 measurements, nominally 12 seconds. The graph spans
+±100 cents around your target, or the current nearest note when no target is
+selected. Values beyond that span reach the edge; the numerical cents readout
+shows the full difference. Gaps indicate missing/uncertain tracking. **Recent
+pitch spread** is the standard deviation in cents over up to ten consecutive
+confident measurements (about two seconds); it appears after four measurements.
+Intended note changes and vibrato increase this number too—it is not a quality
+score. Cents are hundredths of a semitone; 100 cents is one semitone.
+
+Silence, low-level input, unvoiced consonants, clipping, and uncertain periodicity
+withhold the note rather than guessing. Notes require periodicity ≥85% and
+AC RMS ≥0.003 (roughly -50 dBFS); these are detector thresholds, not calibrated
+probabilities. Harmonics, room noise, multiple voices, and octave errors can still
+mislead pitch detection. The detector covers approximately 40–2000 Hz and mono
+analysis averages stereo channels. Readings expire after 750 ms without a fresh
+result. Numeric measurements update about five times per second.
+
+After finalization, review the selected take's **Measured root**. **Apply measured
+root** explicitly copies a sufficiently confident offline estimate into that
+take's root frequency, preserving its audio, trims, range, and existing published
+samples. Review range/trim metadata and use `voicebank use` separately to update
+the playable bank. `voicebank analyze` refreshes suggestions without overwriting
+manual metadata; `voicebank set note A3` or `voicebank set root 220` remains
+available for manual corrections. The live target never changes recorded pitch
+or writes root metadata. Existing bank/import defaults remain compatible.
+
+All analysis is local. The audio callback performs only a nonblocking sample
+handoff to a bounded side queue. A dedicated worker downsamples to at most 8 kHz,
+analyzes a 1024-sample window using the existing YIN detector, and publishes a
+bounded history. GUI reads do not block that worker. Overloaded analysis drops
+only tuner samples and resets continuity; recording-buffer overruns retain their
+existing error handling. There are no new network services or dependencies.
