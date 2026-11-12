@@ -5,6 +5,10 @@
 # Save this file while Songbird is open: appearance reloads automatically.
 version = 1
 
+[session]
+restore_last_project = true
+# last_project = "/absolute/path/to/project"  # Updated after opening/saving.
+
 [appearance]
 font_size = 14.0
 editor_font_size = 15.0
@@ -17,7 +21,7 @@ show_console = true
 base = "dark"        # "dark" or "light"; omitted colors inherit that base.
 background = "#101615"
 panel = "#1a2421"
-text = "#e0ebe6"
+text = "#e0ebe6"      # Interface/output text and editor comments.
 muted = "#879a90"
 accent = "#7de2be"
 selection = "#315e4f"

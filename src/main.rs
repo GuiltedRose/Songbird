@@ -99,6 +99,24 @@ fn main() -> Result<()> {
         Some("recover") => Project::recover(Path::new(arg(1)?))?,
         Some(s) if s.starts_with('-') => bail!("unknown option {s}"),
         _ => {
+            // Explicit paths always take precedence. Restoration happens before
+            // an editor exists, so it cannot replace unsaved in-memory changes.
+            let restored = if args.is_empty() {
+                let result = songbird::config::Watcher::default().load()
+                    .and_then(|config| config.session.restore());
+                match result {
+                    Ok(project) => project,
+                    Err(e) => {
+                        eprintln!("Startup restoration: {e:#}; using default project");
+                        None
+                    }
+                }
+            } else {
+                None
+            };
+            if let Some(project) = restored {
+                return gui::run(project);
+            }
             let root = if let Some(path) = args.first() {
                 PathBuf::from(path)
             } else {

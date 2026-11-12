@@ -298,6 +298,29 @@ You can also render a saved project from the **shell**, without opening the GUI:
 ./target/release/songbird render "$HOME/Music/first-song" "$HOME/Music/first-song/exports/master-v2.flac"
 ```
 
+## Resume the last project
+
+Launching `songbird` without a project argument reopens the last successfully
+opened or saved GUI project. Opening another project or using Save As updates
+the absolute path in the existing user config. An explicit `songbird PROJECT`
+argument always takes precedence. Command-line rendering and checks do not
+change the remembered project.
+
+Restoration is enabled by default. Disable it in your config with:
+
+```toml
+[session]
+restore_last_project = false
+# last_project = "/absolute/path/to/project" # Maintained automatically.
+```
+
+Missing, invalid, or inaccessible remembered projects produce a startup diagnostic
+and fall back to the usual default project. Restoration only opens saved project
+state, leaving recovery drafts untouched; use `recover-draft` explicitly to
+recover edits. It runs before the editor exists and never replaces an unsaved
+editor document. Config write failures are reported in the console without
+discarding the active project. Other config preferences are retained.
+
 ## Customize the theme
 
 Songbird finds its config automatically:
@@ -346,6 +369,24 @@ syntax colors, waveforms, and the recording indicator—see the example for all
 keys. Fonts accept sizes from 10 to 32. Optional `window_width` and `window_height`
 set the initial window size and require a restart. Reloading applies panel visibility only when that setting changes; temporary
 `tracks`/`console` toggles survive unrelated theme saves.
+
+The **Theme** dropdown above the transport switches between Light, Dark, and
+Bubblegum immediately and saves the selection in the active config. Only the
+theme section is replaced; other preferences are retained. To add themes, place
+TOML files containing a `[theme]` section in the `themes/` directory beside your
+active `config.toml` (or beside `SONGBIRD_CONFIG`). Reopen the dropdown to discover
+them. File themes appear with a `(file)` suffix; the current custom palette is
+shown as Custom. Invalid files report their errors in the dropdown.
+
+The [Bubblegum theme](themes/bubblegum.toml) provides a pink, blue, and mint
+palette. Copy its `[theme]` section over your config's existing `[theme]` section
+to keep your other settings. Saved appearance changes reload automatically.
+
+To preview Bubblegum with default settings:
+
+```sh
+SONGBIRD_CONFIG="$PWD/themes/bubblegum.toml" ./target/release/songbird examples/acceptance
+```
 
 To try a separate theme file without changing your normal config:
 

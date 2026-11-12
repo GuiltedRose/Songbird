@@ -1,0 +1,18 @@
+# Bubblegum
+# Copy this [theme] section into your Songbird config to retain other settings.
+[theme]
+accent = "#840017"
+background = "#FFDCE2"
+base = "dark"
+keyword = "#FF3E60"
+muted = "#FFFAF0"
+number = "#b69be6"
+panel = "#8DDAFF"
+recording = "#8DDAFF"
+selection = "#FFFAF0"
+string = "#FF8DA1"
+text = "#58000F"
+waveform = "#8DFFB2"
+widget = "#FFFAF0"
+widget_active = "#8DDAFF"
+widget_hovered = "#8DFFB2"

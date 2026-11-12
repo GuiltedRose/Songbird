@@ -20,6 +20,7 @@ pub struct Config {
     pub recording: crate::recording::Settings,
     pub storage: crate::storage::Limits,
     pub audio: AudioPreferences,
+    pub session: Session,
 }
 impl Default for Config {
     fn default() -> Self {
@@ -32,8 +33,49 @@ impl Default for Config {
             recording: Default::default(),
             storage: Default::default(),
             audio: Default::default(),
+            session: Default::default(),
         }
     }
+}
+#[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
+#[serde(default, deny_unknown_fields)]
+pub struct Session {
+    pub restore_last_project: bool,
+    pub last_project: Option<PathBuf>,
+}
+impl Default for Session {
+    fn default() -> Self {
+        Self { restore_last_project: true, last_project: None }
+    }
+}
+impl Session {
+    /// Startup only: never replaces an editor document or recovers/writes drafts.
+    pub fn restore(&self) -> Result<Option<crate::project::Project>> {
+        if !self.restore_last_project {
+            return Ok(None);
+        }
+        self.last_project.as_deref().map(|path| {
+            ensure!(path.is_absolute(), "last project path must be absolute");
+            crate::project::Project::open(path)
+                .with_context(|| format!("cannot restore project {}", path.display()))
+        }).transpose()
+    }
+}
+
+/// Merge into the latest config, retaining the on-disk restore preference.
+pub fn save_last_project(path: &std::path::Path, project: &std::path::Path) -> Result<Session> {
+    if let Ok(meta) = fs::metadata(path) {
+        ensure!(meta.is_file() && meta.len() <= 65536,
+            "config must be a regular file of at most 64 KiB");
+    }
+    let mut session = match fs::read_to_string(path) {
+        Ok(source) => Config::parse(&source)?.session,
+        Err(e) if e.kind() == ErrorKind::NotFound => Session::default(),
+        Err(e) => return Err(e.into()),
+    };
+    session.last_project = Some(project.canonicalize()?);
+    save_section(path, "session", toml::Value::try_from(&session)?)?;
+    Ok(session)
 }
 #[derive(Clone, Debug, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
@@ -55,6 +97,14 @@ impl Default for AudioPreferences {
 }
 /// Merge only audio preferences; invalid existing files are never overwritten.
 pub fn save_audio(path: &std::path::Path, audio: &AudioPreferences) -> Result<()> {
+    save_section(path, "audio", toml::Value::try_from(audio)?)
+}
+
+pub fn save_theme(path: &std::path::Path, theme: &Theme) -> Result<()> {
+    save_section(path, "theme", toml::Value::try_from(theme)?)
+}
+
+fn save_section(path: &std::path::Path, section: &str, settings: toml::Value) -> Result<()> {
     if let Ok(meta) = fs::metadata(path) {
         ensure!(
             meta.is_file() && meta.len() <= 65536,
@@ -72,7 +122,7 @@ pub fn save_audio(path: &std::path::Path, audio: &AudioPreferences) -> Result<()
     value
         .as_table_mut()
         .context("config must be a table")?
-        .insert("audio".into(), toml::Value::try_from(audio)?);
+        .insert(section.into(), settings);
     let text = toml::to_string_pretty(&value)?;
     Config::parse(&text)?;
     fs::create_dir_all(path.parent().context("config needs parent")?)?;
@@ -100,14 +150,14 @@ impl Default for Appearance {
         }
     }
 }
-#[derive(Clone, Copy, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Copy, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum Base {
     #[default]
     Dark,
     Light,
 }
-#[derive(Clone, Debug, Default, PartialEq, Deserialize)]
+#[derive(Clone, Debug, Default, PartialEq, Serialize, Deserialize)]
 #[serde(default, deny_unknown_fields)]
 pub struct Theme {
     pub base: Base,
@@ -126,6 +176,47 @@ pub struct Theme {
     pub widget_hovered: Option<String>,
     pub widget_active: Option<String>,
     pub border: Option<String>,
+}
+
+/// Built-ins are embedded so installed binaries do not need the source tree.
+pub fn builtin_themes() -> &'static [(String, Theme)] {
+    static THEMES: std::sync::OnceLock<Vec<(String, Theme)>> = std::sync::OnceLock::new();
+    THEMES.get_or_init(|| vec![
+        ("Light".into(), Theme { base: Base::Light, ..Theme::default() }),
+        ("Dark".into(), Theme::default()),
+        ("Bubblegum".into(), Config::parse(include_str!("../themes/bubblegum.toml"))
+            .expect("bundled Bubblegum theme must be valid").theme),
+    ])
+}
+
+/// User themes live beside the active config in themes/*.toml.
+pub fn user_themes(path: &std::path::Path) -> Result<Vec<(String, Result<Theme>)>> {
+    let directory = path.parent().context("config needs parent")?.join("themes");
+    let entries = match fs::read_dir(&directory) {
+        Ok(entries) => entries,
+        Err(e) if e.kind() == ErrorKind::NotFound => return Ok(Vec::new()),
+        Err(e) => return Err(e).context("cannot list themes"),
+    };
+    let mut themes = Vec::new();
+    for entry in entries {
+        let path = entry?.path();
+        if path.extension().is_none_or(|ext| ext != "toml") {
+            continue;
+        }
+        let theme = (|| -> Result<Theme> {
+            let mut file = fs::File::open(&path)
+                .with_context(|| format!("theme {}", path.display()))?;
+            ensure!(file.metadata()?.is_file(), "theme must be a regular file");
+            let mut source = String::new();
+            Read::by_ref(&mut file).take(65537).read_to_string(&mut source)?;
+            Ok(Config::parse(&source)
+                .with_context(|| format!("theme {}", path.display()))?.theme)
+        })();
+        let name = path.file_stem().context("theme needs a filename")?.to_string_lossy();
+        themes.push((format!("{name} (file)"), theme));
+    }
+    themes.sort_by(|a, b| a.0.cmp(&b.0));
+    Ok(themes)
 }
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -462,6 +553,86 @@ impl Watcher {
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn startup_restores_switched_and_saved_as_projects_without_touching_drafts() {
+        let root = crate::codec::unique(&std::env::temp_dir(), "songbird-session", "dir").unwrap();
+        fs::create_dir_all(&root).unwrap();
+        let config = root.join("config.toml");
+        fs::write(&config, "[theme]\naccent='#112233'\n[recording]\nlatency_ms=12.0").unwrap();
+        let first = crate::project::Project::create(&root.join("first"), crate::gui::DEFAULT.into()).unwrap();
+        let mut unsaved = first.clone();
+        unsaved.source.push_str("\n# unsaved draft\n");
+        unsaved.save_draft().unwrap();
+        let draft = fs::read(first.root.join("recovery.sb")).unwrap();
+        save_last_project(&config, &first.root).unwrap();
+        let loaded = Config::parse(&fs::read_to_string(&config).unwrap()).unwrap();
+        assert!(loaded.session.restore_last_project);
+        let restored = loaded.session.restore().unwrap().unwrap();
+        assert_eq!(restored.root, first.root);
+        assert_eq!(restored.source, first.source);
+        assert_eq!(fs::read(first.root.join("recovery.sb")).unwrap(), draft);
+        let second = crate::project::Project::create(&root.join("second"), crate::gui::DEFAULT.into()).unwrap();
+        let saved_as = second.save_as(&root.join("copy")).unwrap();
+        for project in [&second, &saved_as] {
+            save_last_project(&config, &project.root).unwrap();
+            let loaded = Config::parse(&fs::read_to_string(&config).unwrap()).unwrap();
+            assert_eq!(loaded.session.restore().unwrap().unwrap().root, project.root);
+            assert_eq!(loaded.theme.accent.as_deref(), Some("#112233"));
+            assert_eq!(loaded.recording.latency_ms, 12.0);
+        }
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn startup_missing_invalid_and_disabled_restoration() {
+        let root = crate::codec::unique(&std::env::temp_dir(), "songbird-restore", "dir").unwrap();
+        let mut session = Session { last_project: Some(root.clone()), ..Session::default() };
+        assert!(session.restore().is_err());
+        fs::create_dir_all(&root).unwrap();
+        fs::write(root.join("project.toml"), "invalid manifest").unwrap();
+        assert!(session.restore().is_err());
+        assert_eq!(fs::read_to_string(root.join("project.toml")).unwrap(), "invalid manifest");
+        session.restore_last_project = false;
+        assert!(session.restore().unwrap().is_none());
+        let config = root.join("config.toml");
+        fs::write(&config, "[session]\nrestore_last_project=false").unwrap();
+        let saved = save_last_project(&config, &root).unwrap();
+        assert!(!saved.restore_last_project);
+        assert!(saved.restore().unwrap().is_none());
+        assert!(Session::default().restore().unwrap().is_none());
+        fs::remove_dir_all(root).unwrap();
+    }
+
+    #[test]
+    fn theme_selection_preserves_preferences_and_rejects_invalid_config() {
+        let file = crate::codec::unique(&std::env::temp_dir(), "songbird-theme-save", "toml").unwrap();
+        fs::write(&file, "[recording]\nlatency_ms=12.0\n[audio]\ninput='USB mic'\n").unwrap();
+        for (_, theme) in builtin_themes() {
+            save_theme(&file, theme).unwrap();
+            let loaded = Config::parse(&fs::read_to_string(&file).unwrap()).unwrap();
+            assert_eq!(&loaded.theme, theme);
+            assert_eq!(loaded.recording.latency_ms, 12.0);
+            assert_eq!(loaded.audio.input.as_deref(), Some("USB mic"));
+        }
+        fs::write(&file, "[broken").unwrap();
+        assert!(save_theme(&file, &Theme::default()).is_err());
+        assert_eq!(fs::read_to_string(&file).unwrap(), "[broken");
+        fs::remove_file(file).unwrap();
+    }
+
+    #[test]
+    fn user_theme_discovery_keeps_valid_files_when_another_is_invalid() {
+        let root = crate::codec::unique(&std::env::temp_dir(), "songbird-themes", "dir").unwrap();
+        fs::create_dir_all(root.join("themes")).unwrap();
+        fs::write(root.join("themes/valid.toml"), "[theme]\ntext='#112233'").unwrap();
+        fs::write(root.join("themes/broken.toml"), "[broken").unwrap();
+        let themes = user_themes(&root.join("config.toml")).unwrap();
+        assert_eq!(themes.len(), 2);
+        assert!(themes[0].1.is_err());
+        assert_eq!(themes[1].1.as_ref().unwrap().text.as_deref(), Some("#112233"));
+        fs::remove_dir_all(root).unwrap();
+    }
+
     #[test]
     fn audio_preferences_round_trip_and_preserve_other_settings() {
         let file = crate::codec::unique(&std::env::temp_dir(), "songbird-audio", "toml").unwrap();

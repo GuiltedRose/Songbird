@@ -370,6 +370,15 @@ impl App {
         }
         app
     }
+    fn remember_project(&mut self) {
+        let result = self.watcher.path.as_deref()
+            .context("no configuration path available")
+            .and_then(|path| crate::config::save_last_project(path, &self.project.root));
+        match result {
+            Ok(session) => self.config.session = session,
+            Err(e) => self.log(format!("Remember project: {e:#}")),
+        }
+    }
     fn queue_first_asset(&mut self) {
         self.asset_pending = self
             .preview
@@ -1362,7 +1371,7 @@ fn highlight(text: &str, palette: Palette, size: f32) -> egui::text::LayoutJob {
                 comment = true;
             }
             let color = if comment {
-                palette.muted
+                palette.text
             } else if quoted || token.contains('"') {
                 palette.string
             } else if token.chars().next().is_some_and(|c| c.is_ascii_digit()) {
@@ -1549,11 +1558,13 @@ impl eframe::App for App {
                         self.dirty = false;
                     }
                     self.log("Saved atomically");
+                    self.remember_project();
                 }
                 Ok(Reply::Message(s)) => self.log(s),
                 Ok(Reply::Project(p)) => {
                     self.studio = None;
                     self.project = p;
+                    self.remember_project();
                     self.waveform.clear();
                     self.live_waveform.clear();
                     self.scope_source = 0;
@@ -1857,6 +1868,53 @@ impl eframe::App for App {
         }
         egui::TopBottomPanel::top("transport").show(ctx, |ui| {
             self.audio_controls(ui);
+            let mut selected_theme = None;
+            let builtins = crate::config::builtin_themes();
+            let current = builtins.iter().find(|(_, theme)| theme == &self.config.theme)
+                .map_or("Custom", |(name, _)| name.as_str());
+            egui::ComboBox::from_id_salt("theme")
+                .selected_text(format!("Theme: {current}"))
+                .show_ui(ui, |ui| {
+                    for (name, theme) in builtins {
+                        if ui.selectable_label(theme == &self.config.theme, name).clicked() {
+                            selected_theme = Some(theme.clone());
+                        }
+                    }
+                    if let Some(path) = &self.watcher.path {
+                        match crate::config::user_themes(path) {
+                            Ok(themes) => {
+                                for (name, theme) in themes {
+                                    match theme {
+                                        Ok(theme) => {
+                                            if ui.selectable_label(theme == self.config.theme, name).clicked() {
+                                                selected_theme = Some(theme);
+                                            }
+                                        }
+                                        Err(e) => { ui.label(format!("{name}: {e:#}")); }
+                                    }
+                                }
+                            }
+                            Err(e) => { ui.label(format!("Themes: {e:#}")); }
+                        }
+                        ui.separator();
+                        if let Some(parent) = path.parent() {
+                            ui.small(format!("Add TOML themes in {}", parent.join("themes").display()));
+                        }
+                    }
+                });
+            if let Some(theme) = selected_theme {
+                let result = self.watcher.path.as_deref()
+                    .context("no configuration path available")
+                    .and_then(|path| crate::config::save_theme(path, &theme));
+                match result {
+                    Ok(()) => {
+                        let mut config = self.config.clone();
+                        config.theme = theme;
+                        self.accept_config(ctx, config);
+                    }
+                    Err(e) => self.log(format!("Theme: {e:#}")),
+                }
+            }
             ui.horizontal(|ui| {
                 ui.colored_label(self.palette.accent, "SONGBIRD");
                 ui.label(format!(
@@ -2417,7 +2475,8 @@ impl eframe::App for App {
     }
 }
 pub fn run(project: Project) -> Result<()> {
-    let app = App::new(project);
+    let mut app = App::new(project);
+    app.remember_project();
     let options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default().with_inner_size([
             app.config.appearance.window_width,
