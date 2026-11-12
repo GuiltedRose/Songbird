@@ -269,3 +269,17 @@ Tempo/meter maps, markers and repeated sections use the syntax in
 effect/vocal automation are documented in [EDITING.md](EDITING.md). Recorded-source
 trim coordinates remain independent of musical time. Transport and punch/loop
 recording commands are in [RECORDING.md](RECORDING.md).
+
+## Optional mixer routing and analysis
+
+Tracks can declare `route NODE`, `send NODE GAIN [pre|post]`, `drum-only LABEL`
+and one-based `bypass INDEX`. Project-level `channel NAME { source TRACK ... }`
+and `bus NAME { ... }` blocks add grouping, nested routing, sidechain detectors
+and new native EQ/dynamics inserts. See [the complete syntax and signal flow](MIXING.md)
+for ranges, automation, mute/solo, limits and stem behavior. Mini still contains
+patterns only; these mix directives remain native Songbird code.
+
+Prompt `analyze` performs full-render offline sample-peak/RMS/clipping/correlation
+and gain-reduction analysis in the background. `plugins` reports actual hosting
+compatibility; no foreign plugin backend is operational. These are prompt commands,
+not lines to insert into a composition. See [plugin status](PLUGINS.md).

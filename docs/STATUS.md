@@ -1,3 +1,25 @@
+# Routing expansion status — 2026-11-12
+
+The complete mixing/plugin/voicebank expansion request is **unfinished**. This
+increment has source changes and new regression tests, with no implementer-run
+build, test, reference render, GUI, hardware or plugin acceptance. Formatting and
+whitespace review alone do not establish buildability or production readiness.
+
+| Milestone | Current source implementation | Outstanding |
+|---|---|---|
+| 1: mixer | Typed prepared DAG, optional explicit channels, source grouping, nested buses, sends, cycles, checkpoints and meters | Operator regression/PCM/GUI acceptance; bus stems |
+| 2: instruments | Shared routes for all track types, drum-event isolation, node gain/pan/effect automation and bypass | Automatic per-instrument splitting within a multi-source track; acceptance |
+| 3: DSP | RBJ EQ bands, timed compressor/gate, width and graph sidechains; old effects retained | Sidechain detector filtering/live external ports, improved reverb/limiter, optional multiband; objective acceptance |
+| 4: analysis | Offline master/track/node sample peaks, RMS, clipping, correlation and insert gain reduction | Integrated/momentary/short-term LUFS, LRA, true peak, standards conformance, optional spectrum |
+| 5: plugins | Format-neutral control/state/MIDI-Learn contracts and mock-backed tests | ALL VST3/CLAP/LV2 binary adapters, discovery/scanning, native/original GUI integration, OS MIDI I/O, plugin routing/PDC, persistence UI and crash isolation |
+| 6: voicebanks | Separate phonetics overview and five exact-inventory guides, language-specific recording/checklists and offline Help | Operator review of links/rendering, pronunciation/audio quality and real-bank acceptance |
+
+See [mixing](MIXING.md), [plugin compatibility](PLUGINS.md),
+[implementation audit/plan](EXPANSION_PLAN.md) and [operator commands](OPERATIONS.md#routing-expansion-validation-and-rollback).
+No statement below about older executed checks applies to these new changes.
+
+---
+
 # Verification and acceptance status
 
 2026-11-09. This repository contains an integrated implementation, not a certified

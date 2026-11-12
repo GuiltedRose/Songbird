@@ -13,7 +13,7 @@ fn main() -> Result<()> {
     };
     match args.first().map(String::as_str) {
         Some("help" | "--help" | "-h") => println!(
-            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird render-region PROJECT OUTPUT START END [RATE BITS]\nsongbird stems PROJECT NEW_DIRECTORY\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT [BANK]\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
+            "songbird [PROJECT]\nsongbird new DIR\nsongbird check PROJECT\nsongbird analyze PROJECT\nsongbird plugins\nsongbird render PROJECT OUTPUT.flac|wav\nsongbird render-region PROJECT OUTPUT START END [RATE BITS]\nsongbird stems PROJECT NEW_DIRECTORY\nsongbird convert INPUT OUTPUT RATE BITS\nsongbird devices\nsongbird voice-check PROJECT BANK_PATH\nsongbird recover PROJECT\nsongbird recover-take TAKE.wav\nsongbird gui-smoke PROJECT [BANK]\nsongbird bench PROJECT OUTPUT.wav\nNo command starts recording or playback without an explicit GUI action."
         ),
         Some("gui-smoke") => gui::smoke(Project::open(Path::new(arg(1)?))?, args.get(2).cloned())?,
         Some("recover-take") => println!("{}", codec::recover_wav(Path::new(arg(1)?))?.display()),
@@ -21,6 +21,11 @@ fn main() -> Result<()> {
             let p = Project::create(Path::new(arg(1)?), gui::DEFAULT.into())?;
             println!("Created {}", p.root.display());
         }
+        Some("plugins") => println!("{}", songbird::plugins::compatibility()),
+        Some("analyze") => println!(
+            "{}",
+            songbird::analysis::project(&Project::open(Path::new(arg(1)?))?)?
+        ),
         Some("check") => {
             let p = Project::open(Path::new(arg(1)?))?;
             let r = Renderer::prepare(&p.root, language::parse(&p.source)?)?;

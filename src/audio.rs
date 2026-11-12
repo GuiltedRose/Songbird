@@ -27,6 +27,8 @@ pub struct Meters {
     pub loop_count: AtomicU64,
     pub loop_missed: AtomicBool,
     pub track_peaks: [[AtomicU32; 32]; 4],
+    pub mixer_peaks: [[AtomicU32; 32]; 2],
+    pub mixer_clipped: [[AtomicU64; 32]; 2],
     pub drained: AtomicBool,
     pub edit_missed: AtomicBool,
     pub edit_frame: AtomicU64,
@@ -262,6 +264,7 @@ impl LiveContext {
     }
 }
 pub struct Playback {
+    pub mixer_names: Vec<String>,
     pub scope: rtrb::Consumer<[f32; 2]>,
     pub track_scope: rtrb::Consumer<[f32; 128]>,
     stream: Option<cpal::Stream>,
@@ -275,6 +278,10 @@ pub struct Playback {
 }
 impl Playback {
     pub fn start(mut renderer: Renderer, name: Option<&str>) -> Result<Self> {
+        let mixer_names = renderer
+            .mixer
+            .as_ref()
+            .map_or_else(Vec::new, |m| m.names.clone());
         let rate = renderer.score.rate;
         let bar = renderer.bar_frames().max(1);
         let d = device(false, name)?;
@@ -341,6 +348,15 @@ impl Playback {
                     if n == 0 {
                         break;
                     }
+                    if let Some(mixer) = &mut renderer.mixer {
+                        for (i, meter) in mixer.meters.iter_mut().enumerate() {
+                            s.mixer_peaks[i / 32][i % 32]
+                                .fetch_max(meter.peak.to_bits(), Ordering::Relaxed);
+                            s.mixer_clipped[i / 32][i % 32]
+                                .store(meter.clipped_frames, Ordering::Relaxed);
+                            meter.peak = 0.;
+                        }
+                    }
                     let mut peaks = [0.; 128];
                     for (dst, src) in peaks.iter_mut().zip(&renderer.channel_peaks) {
                         *dst = *src;
@@ -375,6 +391,7 @@ impl Playback {
             return Err(e.into());
         }
         Ok(Self {
+            mixer_names,
             scope,
             track_scope,
             stream: Some(stream),
@@ -415,6 +432,14 @@ impl Playback {
         }
     }
     pub fn replace(&mut self, renderer: Renderer) -> Result<()> {
+        let names = renderer
+            .mixer
+            .as_ref()
+            .map_or(&[][..], |m| m.names.as_slice());
+        ensure!(
+            names == self.mixer_names.as_slice(),
+            "stop playback before adding, removing or reordering explicit mixer channels/buses"
+        );
         if let Some((frame, _)) = &self.pending_clock {
             ensure!(
                 self.state.frames.load(Ordering::Relaxed) >= *frame

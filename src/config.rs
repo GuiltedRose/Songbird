@@ -122,6 +122,10 @@ pub struct Theme {
     pub number: Option<String>,
     pub waveform: Option<String>,
     pub recording: Option<String>,
+    pub widget: Option<String>,
+    pub widget_hovered: Option<String>,
+    pub widget_active: Option<String>,
+    pub border: Option<String>,
 }
 #[derive(Clone, Copy)]
 pub struct Palette {
@@ -219,6 +223,9 @@ impl Config {
         let t = &self.theme;
         let dark = matches!(t.base, Base::Dark);
         let hex = |n: u32| Color32::from_rgb((n >> 16) as u8, (n >> 8) as u8, n as u8);
+        for value in [&t.widget, &t.widget_hovered, &t.widget_active, &t.border] {
+            color(value, Color32::TRANSPARENT)?;
+        }
         Ok(Palette {
             background: color(&t.background, hex(if dark { 0x101615 } else { 0xf8faf9 }))?,
             panel: color(&t.panel, hex(if dark { 0x1a2421 } else { 0xe8efec }))?,
@@ -254,6 +261,31 @@ impl Config {
             v.widgets.active.fg_stroke.color = p.accent;
             v.widgets.hovered.fg_stroke.color = p.accent;
             v.hyperlink_color = p.accent;
+            for (widgets, value) in [
+                (&mut v.widgets.inactive, &self.theme.widget),
+                (&mut v.widgets.hovered, &self.theme.widget_hovered),
+                (&mut v.widgets.active, &self.theme.widget_active),
+                (&mut v.widgets.open, &self.theme.widget_active),
+            ] {
+                if value.is_some() {
+                    let fill = color(value, widgets.bg_fill)?;
+                    widgets.bg_fill = fill;
+                    widgets.weak_bg_fill = fill;
+                }
+            }
+            if self.theme.border.is_some() {
+                let border = color(&self.theme.border, v.window_stroke.color)?;
+                v.window_stroke.color = border;
+                for widgets in [
+                    &mut v.widgets.noninteractive,
+                    &mut v.widgets.inactive,
+                    &mut v.widgets.hovered,
+                    &mut v.widgets.active,
+                    &mut v.widgets.open,
+                ] {
+                    widgets.bg_stroke.color = border;
+                }
+            }
             ctx.set_visuals(v);
         }
         if previous.is_none_or(|old| {

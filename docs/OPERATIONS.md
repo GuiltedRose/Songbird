@@ -388,3 +388,118 @@ replay, Re-analyze preserving manual edits, and explicit Use validation. Confirm
 controls disable during capture/finalization and the main editor's unsaved text,
 selection, and focus are unaffected by background operations. Beginner guide
 opens the embedded tutorial. GUI acceptance has not been run by the implementer.
+
+## Routing expansion validation and rollback
+
+This increment has not been compiled, tested, rendered or run by the implementer.
+It adds no Cargo dependency, OS package, service, permission change or plugin
+binary. Existing Rust/ALSA/desktop prerequisites still apply. Foreign plugin ABI
+adapters and standards loudness/true-peak analysis remain unimplemented; `plugins`
+reports that explicitly. Do not accept the complete expansion as production-ready.
+
+From the Songbird checkout, close Songbird and preserve the known-good installed
+executable before building. These Linux/macOS shell commands use fresh directories:
+
+```sh
+songbird_expansion_backup=$(mktemp -d "$HOME/songbird-before-routing.XXXXXX")
+cp -p "$HOME/.local/bin/songbird" "$songbird_expansion_backup/songbird"
+mkdir "$songbird_expansion_backup/baseline" "$songbird_expansion_backup/candidate"
+printf '%s\n' "$songbird_expansion_backup"
+# Establish baseline with the executable you already trust (not the new build).
+"$songbird_expansion_backup/songbird" render examples/garden "$songbird_expansion_backup/baseline/garden.wav"
+"$songbird_expansion_backup/songbird" render examples/voicebank-studio "$songbird_expansion_backup/baseline/voicebank.wav"
+# Dependencies should already be cached; fetch --locked only if needed on a connected host.
+cargo fmt --check
+cargo clippy --locked --all-targets -- -D warnings
+cargo test --locked
+cargo build --release --locked
+./target/release/songbird render examples/garden "$songbird_expansion_backup/candidate/garden.wav"
+./target/release/songbird render examples/voicebank-studio "$songbird_expansion_backup/candidate/voicebank.wav"
+python3 - "$songbird_expansion_backup" <<'PY'
+import pathlib, sys, wave
+root = pathlib.Path(sys.argv[1])
+for name in ('garden.wav', 'voicebank.wav'):
+    with wave.open(str(root / 'baseline' / name), 'rb') as before, wave.open(str(root / 'candidate' / name), 'rb') as after:
+        assert before.getparams() == after.getparams(), name + ': WAV parameters changed'
+        while True:
+            a, b = before.readframes(4096), after.readframes(4096)
+            assert a == b, name + ': legacy PCM changed'
+            if not a:
+                break
+    print(name + ': identical legacy PCM')
+PY
+./target/release/songbird check examples/mixer-routing
+./target/release/songbird analyze examples/mixer-routing
+./target/release/songbird plugins
+./target/release/songbird render examples/mixer-routing "$songbird_expansion_backup/candidate/routing.wav"
+./target/release/songbird render examples/mixer-routing "$songbird_expansion_backup/candidate/routing.flac"
+./target/release/songbird gui-smoke examples/mixer-routing
+./target/release/songbird examples/mixer-routing
+```
+
+If there is no installed executable, choose another known-good binary and adjust
+the backup command; do not substitute the candidate as its own baseline. If a
+known-good baseline cannot be obtained, record that limitation rather than calling
+legacy audio identity validated. Python is needed only for the optional PCM
+comparison script, not Songbird. On Windows use the existing platform build
+prerequisites, PowerShell copies and `target/release/songbird.exe`; the Cargo and
+Songbird subcommands are the same. Cross-platform builds for this increment are
+not established by the earlier user-reported Windows/macOS/Linux builds.
+
+Operator acceptance:
+
+1. Confirm existing projects parse, play, loop, seek and export with unchanged PCM.
+   Check both native and Mini arrangements plus a saved voicebank project.
+2. In the new example verify drum isolation, bass ducking and auxiliary wet signal.
+   Compare the sidechain compressor enabled/bypassed. Test node gain/pan/mute/solo,
+   pre/post sends, missing references, source conflicts, routing and detector cycles.
+   Invalid graphs should fail preparation before playback, not fall back silently.
+3. Listen for clicks/instability during automation and near-Nyquist EQ settings.
+   Compare underrun counters under normal load. Seek backwards and loop over delay/
+   reverb tails; graph state should restore like existing track/master DSP.
+4. Decode exported WAV/FLAC with an independent decoder and compare PCM at matching
+   bit depth. Check isolated stems have no bus/master processing. Review offline
+   sample-peak/RMS/correlation values independently; no LUFS/true-peak claim is made.
+5. Open Help → Phonetics and all five language checklists. Check navigation from
+   First Voicebank, correct inventories and readable IPA. Supplemental external
+   links should open only when clicked; essential guides remain available offline.
+6. Plugin contract tests use a mock only. They must not be reported as plugin
+   loading, GUI, MIDI device, latency-compensation or crash-isolation acceptance.
+
+After all required checks pass, activate the candidate explicitly:
+
+```sh
+install -m 755 target/release/songbird "$HOME/.local/bin/songbird"
+cmp target/release/songbird "$HOME/.local/bin/songbird"
+"$HOME/.local/bin/songbird" examples/mixer-routing
+```
+
+To roll back, stop playback/finish recordings, close the application, and restore
+only the saved executable. Keep all project/composition/media files:
+
+```sh
+install -m 755 "$songbird_expansion_backup/songbird" "$HOME/.local/bin/songbird"
+```
+
+Older executables cannot parse new routing syntax; reopen a known-good older
+composition generation or your unchanged project copy. Do not delete recordings,
+voicebanks, plugin snapshots or user preferences to downgrade the application.
+
+## Sound shorthand and constructor acceptance
+
+No additional dependency, runtime or sound download is needed. Run the same Cargo
+validation/build/install commands above; tests and hardware/GUI playback were not
+executed by the implementer for this increment. New regression coverage includes
+constructor timing/control order, native/Mini coexistence, actual local-sample end,
+shorthand, malformed expressions and Help catalogue drift.
+
+In a practice composition, compare native `pattern "kick hat snare hat"` with
+`pattern "bd hh sd hh"`, then compare a Mini track using the same names. Audition
+the distinct open/closed hats and other native percussion at a comfortable volume.
+Try the documented `s("bd*2,oh*4").end("<.1 .2 .5 1>").fast(2)` and
+`s("[bd <hh oh>]*2").dec(.4)` on separate lines/tracks. Check that nearby native
+synth/effect/routing statements still work. Confirm unsupported methods fail,
+local drum aliases use their declared file, and dense/long-tail overloads fail
+preparation without starting audio. Check Help → Sound library and local links.
+Use the executable backup/install/rollback procedure above; original audio and
+composition files are retained.

@@ -26,6 +26,11 @@ string = "#d1b878"
 number = "#b69be6"
 waveform = "#5fb9a0"
 recording = "#ff7e86"
+# Button/dropdown backgrounds (the grey controls); independent of panel colors.
+widget = "#383838"
+widget_hovered = "#484848"
+widget_active = "#585858"  # Pressed controls and open dropdowns.
+border = "#606060"         # Widget outlines, separators, and window outlines.
 
 # Interface and singing defaults are independent; old banks keep their language.
 [language]

@@ -203,3 +203,12 @@ The bundled [multi-label example](../examples/voicebank-studio/README.md) contai
 original generated audio. It exercises the workflow; it is not a full human
 English bank. Real-device recording/playback and intelligible human singing
 require actual authorized samples and hardware listening tests.
+
+## Language-specific sound references
+
+The [phonetics overview](PHONETICS.md) links directly to [English](phonetics/en.md),
+[German](phonetics/de.md), [French](phonetics/fr.md), [Japanese](phonetics/ja.md), and
+[Latin](phonetics/la.md) checklists. They list the actual shipped IDs, broad IPA,
+pronunciation cues, dialect limitations, recording guidance and coverage checkboxes.
+These pages are embedded in Help. Procedural fixtures and published human takes
+are distinct; a profile's inventory is not a claim that your bank covers it.

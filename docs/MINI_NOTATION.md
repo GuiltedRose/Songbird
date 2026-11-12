@@ -52,7 +52,8 @@ Semantics were checked against the official [mini-notation reference](https://st
 and [pattern constructors](https://strudel.cc/learn/factories/). Songbird implements
 this documented subset, not the JavaScript Pattern API or all Strudel syntax.
 Decimal speed factors are accepted. Negative speed, underscore elongation,
-parameter-valued operators and JS expressions are not supported.
+general parameter-valued operators and arbitrary JS expressions are not supported.
+The limited sound-constructor/control frontend documented below is available.
 
 ## Instruments, singers and editing
 
@@ -102,3 +103,90 @@ and FLAC/WAV mixes plus a region export. It combines mini drums, nested keys,
 cycle-alternating bass, sections, an imported fixture, singing, automation and
 native effects. No microphone or human voicebank is involved. It also exercises tempo changes, a ramp, meter changes and markers. Physical
 punch recording remains an operator check; see [recording](RECORDING.md).
+
+## Familiar sound constructors
+
+You can keep native composition statements and Mini patterns together, and use a
+limited familiar sound-expression spelling without running JavaScript:
+
+```text
+tempo 140
+track drums {
+    s("bd*2,oh*4").end("<.1 .2 .5 1>").fast(2)
+    gain -12db
+}
+track melody {
+    synth triangle
+    notation mini
+    notes "c4 <e4 g4>"
+    cycle 4
+    cycles 4
+}
+track native_line {
+    synth sine
+    notes "C3:2 G3:2"
+    gain -15db
+}
+```
+
+Constructors go on their own line inside a native track. Native routing, effects,
+gain, instrument definitions, arrangement and exports remain available. A bare
+standalone `s(...)` or `$: s(...)` creates an automatically named looping percussion
+track for the arrangement. Inside an explicit track, `cycles`/`loop` retain their
+normal meaning. For multiple cycles in a non-looping track, declare `cycles`.
+`sound(...)` is an alias of `s(...)`; single/double quoted pattern strings work.
+Chained calls can continue on following lines beginning with `.`. Standalone
+constructors also work inside native sections. Use an explicitly named track when
+other composition code needs a stable routing/source name. Native statements
+and Mini patterns remain supported; this does not evaluate arbitrary JavaScript.
+
+Supported chained methods:
+
+| Method | Meaning |
+|---|---|
+| `.fast(NUMBER)` | Speed up the entire preceding expression; equivalent to grouping and `*NUMBER` |
+| `.slow(NUMBER)` | Slow down the preceding expression with `/NUMBER` |
+| `.end(NUMBER_OR_PATTERN)` | Play a fraction of the local source, from 0 to 1 |
+| `.dec(SECONDS_OR_PATTERN)` / `.decay(...)` | Decay from the initial peak toward sustain over the specified seconds |
+| `.sustain(LEVEL_OR_PATTERN)` / `.sus(...)` | Sustain level from 0 to 1 for the decay envelope |
+
+For example:
+
+```text
+$: s("[bd <hh oh>]*2").dec(.4)
+```
+
+The [sound library](SOUNDS.md) lists all supported shorthand and distinct native
+percussion. Explicit local `drum NAME FILE` mappings take priority over aliases.
+Existing full identifiers such as `kick`, `snare`, `hat` and `clap` still work.
+
+Numeric end/decay/sustain patterns use the same bounded Mini parser, including
+alternation, subdivisions, repetitions and seeded choices. They must supply one
+numeric value at every sound onset; ambiguous overlapping control values or
+missing values are errors. End/sustain ranges are 0–1, decay 0–10 seconds, scalar
+speed factors (0,1024]. Chain order matters: a subsequent fast/slow also transforms
+previous control patterns; a control added afterward keeps its own cycle timing.
+Unsupported functions and arithmetic expressions produce errors, not partial
+JavaScript execution.
+
+These constructors currently trigger percussion/local drum samples. Continue to
+use native synth/notes directives for pitched instruments and singing. They do
+not implement the complete Strudel Pattern API. The familiar spellings follow
+[Strudel time modifiers](https://strudel.cc/learn/time-modifiers/),
+[sampler end](https://strudel.cc/learn/samples/#end), and
+[decay/sustain controls](https://strudel.cc/learn/effects/#decay); native audio
+sources and envelope defaults remain Songbird's own.
+
+Legacy bare native/Mini patterns keep their previous event-duration gating. The
+opt-in sound constructor plays each source tail independently of step duration:
+end is a fraction of the actual local file, or a procedural voice's finite natural
+tail (its slowest envelope's -80 dB point). Percussion sustain defaults to zero;
+a declared decay therefore reaches silence unless sustain is raised. Short edge
+fades (0.5 ms attack, 2 ms release) reduce truncation clicks. Tails are bounded to
+30 seconds, and preparation rejects patterns with more than 64 event candidates
+inside their longest-tail window. Shorten end/decay or reduce speed on overload.
+All expansion, aliases and control patterns resolve during preparation, outside
+CPAL. Source files, saved compositions and existing Mini syntax are preserved.
+
+A complete [mixed example](../examples/shorthand-session/README.md) is included for
+operator playback/render checks; it has not been hardware-validated by the implementer.

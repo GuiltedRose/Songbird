@@ -30,3 +30,11 @@ pub mod recording;
 pub mod storage;
 
 pub mod tuner;
+
+pub mod mixer;
+
+pub mod analysis;
+
+pub mod plugins;
+
+pub mod strudel;

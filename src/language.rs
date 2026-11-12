@@ -20,6 +20,8 @@ pub struct Score {
     pub voices: BTreeMap<String, Voice>,
     pub master: Vec<Effect>,
     #[serde(default)]
+    pub mixer: Vec<crate::mixer::Node>,
+    #[serde(default)]
     pub language: Option<String>,
     #[serde(default)]
     pub inventory: Option<String>,
@@ -41,6 +43,7 @@ impl Default for Score {
             tracks: vec![],
             voices: BTreeMap::new(),
             master: vec![],
+            mixer: vec![],
             language: None,
             inventory: None,
             provider: None,
@@ -61,6 +64,16 @@ pub struct Voice {
 }
 #[derive(Clone, Debug, Serialize, Deserialize)]
 pub struct Track {
+    #[serde(default)]
+    pub mini_sound: bool,
+    #[serde(default)]
+    pub mini_controls: Vec<crate::strudel::Control>,
+    #[serde(default)]
+    pub routing: crate::mixer::Routing,
+    #[serde(default)]
+    pub bypassed: Vec<usize>,
+    #[serde(default)]
+    pub drum_only: Option<String>,
     pub name: String,
     pub instrument: String,
     pub sequence: String,
@@ -133,6 +146,11 @@ fn one() -> f32 {
 impl Track {
     pub fn new(name: String) -> Self {
         Self {
+            mini_sound: false,
+            mini_controls: vec![],
+            routing: Default::default(),
+            bypassed: vec![],
+            drum_only: None,
             name,
             instrument: "sine".into(),
             sequence: String::new(),
@@ -238,6 +256,7 @@ pub struct Automation {
 }
 #[derive(Clone, Debug, PartialEq)]
 pub struct Event {
+    pub playback: Option<crate::strudel::Playback>,
     pub beat: f64,
     pub duration: f64,
     pub notes: Vec<i32>,
@@ -402,8 +421,11 @@ fn number(v: &[String], i: usize) -> Result<f32> {
 pub(crate) fn effect(v: &[String]) -> Result<Effect> {
     ensure!(!v.is_empty(), "effect name required");
     let count = match v[0].as_str() {
-        "eq" => 3,
-        "compress" => 2,
+        "eq" | "bell" | "lowshelf" | "highshelf" => 3,
+        "compress" | "highpass" | "lowpass" => 2,
+        "compressor" => 6,
+        "noisegate" => 4,
+        "width" => 1,
         "limit" | "gate" | "reverb" | "denoise" | "filter" => 1,
         "delay" => 3,
         _ => bail!("unknown effect {}", v[0]),
@@ -417,6 +439,32 @@ pub(crate) fn effect(v: &[String]) -> Result<Effect> {
         .map(|i| number(v, i))
         .collect::<Result<Vec<_>>>()?;
     match v[0].as_str() {
+        "highpass" | "lowpass" | "bell" | "lowshelf" | "highshelf" => {
+            let q = *args.last().unwrap();
+            ensure!(
+                (20. ..=20000.).contains(&args[0])
+                    && (0.1..=20.).contains(&q)
+                    && (args.len() == 2 || (-24. ..=24.).contains(&args[1])),
+                "parametric EQ: Hz 20..20000, gain dB -24..24, Q 0.1..20"
+            );
+        }
+        "compressor" => ensure!(
+            (-90. ..=0.).contains(&args[0])
+                && (1. ..=100.).contains(&args[1])
+                && (0.1..=2000.).contains(&args[2])
+                && (1. ..=5000.).contains(&args[3])
+                && (0. ..=24.).contains(&args[4])
+                && (-24. ..=24.).contains(&args[5]),
+            "compressor: threshold dB, ratio, attack ms, release ms, knee dB, makeup dB"
+        ),
+        "noisegate" => ensure!(
+            (-100. ..=0.).contains(&args[0])
+                && (0.1..=2000.).contains(&args[1])
+                && (1. ..=5000.).contains(&args[2])
+                && (0. ..=5000.).contains(&args[3]),
+            "noisegate: threshold dB, attack ms, release ms, hold ms"
+        ),
+        "width" => ensure!((0. ..=2.).contains(&args[0]), "width range 0..2"),
         "delay" => ensure!(
             args[0] > 0. && args[0] <= 4. && args[1].abs() < 1. && (0.0..=1.).contains(&args[2]),
             "delay: seconds (0,4], feedback (-1,1), wet [0,1]"
@@ -445,7 +493,8 @@ pub(crate) fn effect(v: &[String]) -> Result<Effect> {
     })
 }
 pub fn parse(src: &str) -> Result<Score> {
-    let rows = lex(src)?;
+    let translated = crate::strudel::translate(src)?;
+    let rows = lex(&translated)?;
     let mut score = Score::default();
     let mut vars = BTreeMap::<String, String>::new();
     let mut instruments = BTreeMap::<String, Track>::new();
@@ -691,6 +740,76 @@ pub fn parse(src: &str) -> Result<Score> {
                     ));
                     score.tracks.push(t);
                 }
+                "channel" | "bus" => {
+                    ensure!(section.is_none(), "mixer nodes must be at project scope");
+                    ensure!(
+                        v.len() == 3 && arg(v, 2)? == "{",
+                        "channel/bus NAME {{ ... }}"
+                    );
+                    ensure!(score.mixer.len() < 64, "mixer node limit 64");
+                    let mut controls = Track::new(arg(v, 1)?.into());
+                    let mut sources = Vec::new();
+                    i += 1;
+                    while i < rows.len() && rows[i][0] != "}" {
+                        let row = &rows[i];
+                        if row[0] == "sidechain" {
+                            ensure!(
+                                row.len() == 2 && controls.routing.sidechain.is_none(),
+                                "sidechain SOURCE (once per node)"
+                            );
+                            controls.routing.sidechain = Some(arg(row, 1)?.into());
+                        } else if row[0] == "source" {
+                            ensure!(row.len() == 2, "source TRACK");
+                            sources.push(arg(row, 1)?.to_owned());
+                        } else {
+                            ensure!(
+                                [
+                                    "gain",
+                                    "pan",
+                                    "mute",
+                                    "solo",
+                                    "route",
+                                    "send",
+                                    "automate",
+                                    "bypass",
+                                    "filter",
+                                    "eq",
+                                    "compress",
+                                    "limit",
+                                    "gate",
+                                    "reverb",
+                                    "delay",
+                                    "denoise",
+                                    "highpass",
+                                    "lowpass",
+                                    "bell",
+                                    "lowshelf",
+                                    "highshelf",
+                                    "compressor",
+                                    "noisegate",
+                                    "width"
+                                ]
+                                .contains(&row[0].as_str()),
+                                "unsupported mixer control {}",
+                                row[0]
+                            );
+                            parse_track(row, &mut controls, &vars, &instruments, score.tempo)?;
+                            ensure!(
+                                controls.automation.iter().all(|a| ["gain", "pan", "filter"]
+                                    .contains(&a.parameter.as_str())
+                                    || a.parameter.starts_with("effect.")),
+                                "mixer automation supports gain, pan, filter, effect.INDEX.ARG"
+                            );
+                        }
+                        i += 1;
+                    }
+                    ensure!(i < rows.len(), "unclosed mixer node");
+                    score.mixer.push(crate::mixer::Node {
+                        controls,
+                        sources,
+                        bus: v[0] == "bus",
+                    });
+                }
                 "master" => score.master.push(effect(&v[1..])?),
                 _ => bail!("unknown directive {}", v[0]),
             }
@@ -787,7 +906,29 @@ pub fn parse(src: &str) -> Result<Score> {
         }
     }
     ensure!(score.duration() <= 3600., "arrangement exceeds one hour");
-    for t in &score.tracks {
+    for node in &mut score.mixer {
+        for automation in &mut node.controls.automation {
+            for (point, beat) in automation.points.iter_mut().zip(&automation.musical) {
+                if let Some(beat) = beat {
+                    point[0] = clock.seconds(*beat);
+                }
+            }
+            ensure!(
+                automation.points.windows(2).all(|p| p[0][0] < p[1][0]),
+                "mixer automation points conflict after tempo conversion"
+            );
+        }
+    }
+    for t in score
+        .tracks
+        .iter()
+        .chain(score.mixer.iter().map(|n| &n.controls))
+    {
+        ensure!(
+            t.vocal_preset.is_some() || t.bypassed.iter().all(|&i| i > 0 && i <= t.effects.len()),
+            "unknown bypassed insert on {}",
+            t.name
+        );
         ensure!(
             !t.automation.iter().any(|a| a.parameter == "filter")
                 || t.effects.iter().any(|e| e.kind == "filter"),
@@ -977,6 +1118,55 @@ fn parse_track(
         "step" => {
             t.step = number(v, 1)? as f64;
             ensure!(t.step > 0. && t.step <= 64., "step range (0,64]");
+        }
+        "route" => {
+            ensure!(
+                v.len() == 2 && t.routing.route.is_none(),
+                "route DESTINATION (once per channel)"
+            );
+            t.routing.route = Some(arg(v, 1)?.into());
+        }
+        "send" => {
+            ensure!(
+                (v.len() == 3 || v.len() == 4) && t.routing.sends.len() < 32,
+                "send DESTINATION GAIN [pre|post]; maximum 32 sends"
+            );
+            let mode = v.get(3).map_or("post", String::as_str);
+            ensure!(["pre", "post"].contains(&mode), "send tap is pre or post");
+            t.routing.sends.push(crate::mixer::Send {
+                destination: arg(v, 1)?.into(),
+                gain: gain(arg(v, 2)?)?,
+                pre: mode == "pre",
+            });
+        }
+        "bypass" => {
+            ensure!(v.len() == 2, "bypass INSERT_INDEX (one-based)");
+            let index: usize = arg(v, 1)?.parse()?;
+            ensure!(index > 0, "insert index starts at 1");
+            t.bypassed.push(index);
+        }
+        "mini-sound" => {
+            ensure!(v.len() == 1, "mini-sound takes no arguments");
+            t.mini_sound = true;
+        }
+        "mini-control" => {
+            ensure!(
+                v.len() == 3
+                    && ["end", "decay", "sustain"].contains(&arg(v, 1)?)
+                    && t.mini_controls.len() < 3,
+                "mini-control end|decay|sustain PATTERN (maximum three controls)"
+            );
+            t.mini_controls.push(crate::strudel::Control {
+                name: arg(v, 1)?.into(),
+                pattern: arg(v, 2)?.into(),
+            });
+        }
+        "drum-only" => {
+            ensure!(v.len() == 2, "drum-only LABEL");
+            t.drum_only = Some(arg(v, 1)?.into());
+        }
+        "plugin" => {
+            bail!("plugin hosting is not available in this build; no plugin is silently bypassed")
         }
         "gain" => t.gain = gain(arg(v, 1)?)?,
         "pan" => {
@@ -1324,7 +1514,7 @@ pub fn events(src: &str, step: f64) -> Result<Vec<Event>> {
                 };
                 let (notes, drum) = if token == "-" {
                     (vec![], None)
-                } else if ["kick", "snare", "hat", "clap"].contains(&token) {
+                } else if crate::dsp::DRUM_NAMES.contains(&crate::strudel::drum_alias(token)) {
                     (vec![], Some(token.into()))
                 } else if token.starts_with('[') && token.ends_with(']') {
                     let notes = token[1..token.len() - 1]
@@ -1337,6 +1527,7 @@ pub fn events(src: &str, step: f64) -> Result<Vec<Event>> {
                     (vec![note(token)?], None)
                 };
                 vec![Event {
+                    playback: None,
                     beat: 0.,
                     duration,
                     notes,

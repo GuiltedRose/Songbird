@@ -102,3 +102,12 @@ Native CI can verify save/reopen and codec behavior but cannot replace these che
 For rollback, close Songbird and launch the previous extracted executable/app.
 Keep project folders, configs, takes and save generations. This packaging has no
 installer, automatic update mechanism, data migration, or system service.
+
+## New routing/DSP/plugin expansion
+
+The 2026-11-12 routing/native-DSP source increment has no added system dependency,
+but has not been built or validated by the implementer on any OS. Previous user
+build/audio confirmations apply to earlier code. VST3/CLAP/LV2 binary hosting,
+plugin GUIs, device MIDI and latency compensation remain unavailable on **all**
+platforms; there is no universal compatibility claim. See [status](STATUS.md) and
+[operator validation](OPERATIONS.md#routing-expansion-validation-and-rollback).

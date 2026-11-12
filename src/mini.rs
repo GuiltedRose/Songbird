@@ -463,6 +463,20 @@ impl Pattern {
         );
         Ok(Self(node))
     }
+    pub(crate) fn control_values(&self, cycles: f64, seed: u64) -> Result<Vec<(f64, f64, String)>> {
+        ensure!(
+            cycles.is_finite() && cycles > 0. && cycles <= 65536.,
+            "control query exceeds cycle limit"
+        );
+        let hits = self.0.query(0., cycles, &mut Query { seed, work: 0 })?;
+        ensure!(hits.len() <= MAX_EVENTS, "mini control event limit 65536");
+        let mut values: Vec<_> = hits
+            .into_iter()
+            .map(|hit| (hit.start, hit.end, hit.value))
+            .collect();
+        values.sort_by(|a, b| a.0.total_cmp(&b.0));
+        Ok(values)
+    }
     /// Query onsets in a half-open cycle range. Durations can extend past its end.
     pub fn events(&self, start: f64, end: f64, cycle_beats: f64, seed: u64) -> Result<Vec<Event>> {
         ensure!(
@@ -484,6 +498,7 @@ impl Pattern {
                 Err(_) => (vec![], Some(h.value)),
             };
             out.push(Event {
+                playback: None,
                 beat: h.start * cycle_beats,
                 duration: (h.end - h.start) * cycle_beats,
                 notes,

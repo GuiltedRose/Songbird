@@ -118,3 +118,16 @@ Renderer checkpoints retain oscillator/vocal/effect state for rewind and loops.
 `recording` supplies an atomic capture gate and bounded loop-span metadata;
 `storage` uses native free-space checks, cross-process cache reservations and
 orphan-only eviction. See [workflow limits](DAW_EXPANSION.md).
+
+## Prepared native routing and staged plugin contracts
+
+`mixer` compiles explicit source ownership, typed destinations, send taps and
+sidechain dependencies into a bounded deterministic DAG during Renderer preparation.
+Existing tracks stay automatic channels. Node control automation resolves insert
+indices before processing; fixed frame arrays carry signals without per-frame
+allocation. Renderer checkpoints include bus DSP; meter history is not rewound
+with DSP. The old sum path remains when no new routing feature is used.
+`analysis` measures the shared renderer offline; it does not approximate LUFS or
+true peak. `plugins` defines format-neutral control/state contracts with mock
+coverage; it has no binary backend or audio-graph integration. See [current
+limitations](STATUS.md) before describing any of this increment as validated.

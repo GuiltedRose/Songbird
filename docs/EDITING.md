@@ -70,7 +70,9 @@ Effects run in source order. Gain/pan, mute and solo remain explicit track setti
 post-fader channel peaks and clipping indicators appear with effect order/arguments
 in the track panel, alongside master/input meters. Leave headroom (the example uses
 small channel gains) and inspect peak/clipping reports. Existing fixed track/master
-effects remain shared by playback and export; there is no arbitrary bus graph.
+effects remain shared by playback and export. Optional explicit channels, buses,
+sends and sidechains now use the [prepared routing graph](MIXING.md); existing
+isolated stems retain their pre-bus semantics.
 
 ## Disk and cache recovery
 
@@ -146,3 +148,9 @@ dropdown, **Take** dropdown, **Next missing sound**, original/trimmed listening,
 validated Studio commands as the prompt; publication remains explicit and source
 takes remain preserved. Controls disable during capture/finalization/background
 operations. They do not replace or reset the composition editor.
+
+Theme widget colors can be set separately from panels: `[theme]` keys `widget`,
+`widget_hovered`, and `widget_active` control button/dropdown fills; `border`
+controls their outlines, separators and window outlines. Progress and meter fills
+use `selection`. All accept `#RRGGBB` and hot-reload like other theme values.
+Omitted widget/border values retain the base theme defaults. See `config.example.toml`.

@@ -104,6 +104,27 @@ If a directory or TOML file is reported missing, check the project path at the t
 That bank must belong to the project you currently have open. Reopening preserves
 takes and preparation metadata; it does not start capture.
 
+## Select your target language and open its phonetics guide
+
+The final `english` argument above selects English when creating the bank. For
+another language, create a separate bank with the desired tag instead, such as
+`voicebank new voices/my-fr "My French Voice" fr`. Select language at creation,
+then open its guide before recording:
+
+- [English sounds](phonetics/en.md)
+- [German sounds](phonetics/de.md)
+- [French sounds](phonetics/fr.md)
+- [Japanese sounds](phonetics/ja.md)
+- [Latin sounds](phonetics/la.md) (voicebanks only)
+
+The **ID**, IPA, highlighted example and recording checklist explain exactly what
+to record. “Me see” below is an English starter exercise; it is not a pronunciation
+recipe for every language. For another bank, choose short words with known entries
+in its language dictionary and use its coverage report. Follow this sequence:
+create bank and select language → open phonetics guide → record sounds → validate
+and Use samples → test singing → save/export the bank. See the
+[phonetics overview](PHONETICS.md) for naming, formats and source-audio handling.
+
 ## 2. Prepare the microphone
 
 Expand **Audio devices & recording** above the editor:

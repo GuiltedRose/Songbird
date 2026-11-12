@@ -26,3 +26,6 @@ See [language packs](../LANGUAGES.md) for selection precedence, resource authori
 configuration, licensing and operator verification. Neither human pronunciation
 quality nor this increment's runtime behavior has been validated. Save and reopen
 a test project and listen before relying on a bank in a production song.
+
+For exact sound IDs, IPA, examples and a recording checklist, open the
+[German phonetics guide](../phonetics/de.md).

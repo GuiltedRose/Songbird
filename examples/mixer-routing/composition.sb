@@ -1,0 +1,53 @@
+project "Routing and sidechain example"
+tempo 140
+signature 4/4
+bars 4
+rate 48000
+bits 24
+track kick {
+    instrument drumkit
+    notation mini
+    pattern "kick snare [hat hat] clap"
+    cycle 4
+    cycles 4
+    drum-only kick
+    gain -10db
+    route drums
+}
+track percussion {
+    instrument drumkit
+    pattern "kick hat snare hat"
+    drum-only hat
+    gain -15db
+    loop
+    route drums
+}
+track bass {
+    synth saw
+    notes "C2:2 G2:2"
+    gain -16db
+    loop
+}
+channel bass_strip {
+    source bass
+    sidechain kick
+    highpass 35 0.707
+    compressor -24 4 2 120 6 0
+    send room -18db post
+    route music
+}
+bus drums {
+    bell 250 -2 1.2
+    route music
+}
+bus room {
+    reverb 1
+    gain -12db
+    route music
+}
+bus music {
+    highpass 25 0.707
+    automate gain "0b=0.8 16b=1" linear
+    route master
+}
+master limit -1

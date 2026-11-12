@@ -447,3 +447,26 @@ starts from zero: project folders, microphone selection, sound labels, note/Hz a
 trim explanations, then three recordings that sing “me see.” Studio's sidebar
 provides sound/take dropdowns, original/trimmed replay, re-analysis, and explicit
 **Use selected take** publication without replacing the composition editor.
+
+## Optional code-first mixing expansion (unvalidated increment)
+
+[Routing and native mixing](docs/MIXING.md) adds explicit channels, grouped sources,
+nested buses, pre/post sends, drum isolation, sidechains, native EQ/dynamics and
+node automation through the existing renderer. `analyze` reports actual offline
+sample peaks, RMS, clipping, correlation and insert gain reduction. LUFS/LRA/true
+peak and binary plugin hosting remain unfinished; the format-neutral plugin API
+is not a working VST3/CLAP/LV2 host. Read [status](docs/STATUS.md) and run the
+[operator checks](docs/OPERATIONS.md#routing-expansion-validation-and-rollback).
+The [hybrid example](examples/mixer-routing/README.md) needs no plugin dependency.
+
+The beginner bank workflow now links directly to [language-specific phonetics](docs/PHONETICS.md),
+including exact shipped IDs, broad IPA, examples, dialect notes and recording
+checklists for English/German/French/Japanese/Latin. These guides are embedded in
+Help and work offline; linked audio references are optional supplements.
+
+Mini/native compositions also accept familiar percussion names (`bd`, `sd`, `hh`,
+`oh`, and more) and bounded `s(...)`/`sound(...)` expressions with fast/slow,
+sample-end and decay/sustain controls. See [syntax](docs/MINI_NOTATION.md#familiar-sound-constructors)
+and the offline Help [Sound library](docs/SOUNDS.md) for the native collection and
+local sample mappings. Native Songbird statements remain the main composition,
+mixing and routing interface. No JavaScript runtime is introduced.

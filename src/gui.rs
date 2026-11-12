@@ -17,6 +17,7 @@ use std::{
 const HELP: &str = "play | stop | pause | resume | seek POSITION | jump MARKER | range START END | loop on|off | restart | marker NAME | eval | save | open DIR | save-as DIR | import FILE | render FILE | render-region FILE START END | stems NEW_DIRECTORY | devices | input NAME | output NAME | record NAME flac|wav | record-at NAME START [END] | record-loop NAME | count-in BARS | pre-roll BARS | latency MS | metronome on|off | takes | take-replay ID | take-use ID [AT [TRIM_START TRIM_END]] | record-stop | voicebank help | channels 1|2 | monitor on|off | voice-new PATH NAME | voice-check PATH | undo | redo | tracks | console | find TEXT | recover-draft";
 pub const DEFAULT: &str = include_str!("../examples/garden/composition.sb");
 enum Job {
+    Analyze(Project),
     Waveform(Project, PathBuf),
     Language(Project, Vec<String>),
     Studio(studio::Request),
@@ -62,6 +63,9 @@ impl Work {
             while let Ok(job) = rx.recv() {
                 let r = (|| -> Result<Reply> {
                     Ok(match job {
+                        Job::Analyze(project) => {
+                            Reply::Message(crate::analysis::project(&project)?)
+                        }
                         Job::Waveform(p, path) => {
                             let asset = crate::codec::Asset::decode(&path, &p.root.join("cache"))?;
                             Reply::Waveform(compact_peaks(&asset.waveform, 2048))
@@ -1002,6 +1006,8 @@ impl App {
                     self.project.root.join("exports").join(name),
                 ))?;
             }
+            "plugins" => self.log(crate::plugins::compatibility()),
+            "analyze" => self.work.send(Job::Analyze(self.project.clone()))?,
             "devices" => {
                 for d in audio::devices()? {
                     self.log(d);
@@ -1940,7 +1946,7 @@ impl eframe::App for App {
                 if let Some(score) = &self.preview {
                     let duration = score.duration();
                     let seconds = self.playback.as_ref().map_or(self.cursor_seconds, |p| p.state.frames.load(std::sync::atomic::Ordering::Relaxed) as f64 / p.rate as f64);
-                    ui.add(egui::ProgressBar::new((seconds/duration.max(0.001)).clamp(0.,1.) as f32).desired_width(140.).text(format!("{:.0}s left",(duration-self.readout_seconds).max(0.))));
+                    ui.add(egui::ProgressBar::new((seconds/duration.max(0.001)).clamp(0.,1.) as f32).fill(self.palette.selection).desired_width(140.).text(format!("{:.0}s left",(duration-self.readout_seconds).max(0.))));
                 }
                 ui.monospace(format!(
                     "OUT {:>4.0} dB  IN {:>4.0} dB",
@@ -2079,6 +2085,17 @@ impl eframe::App for App {
                                 }
                                 ui.separator();
                             }
+                        }
+                        if let Some(playback) = &self.playback {
+                            egui::CollapsingHeader::new("Mixer buses/channels").show(ui, |ui| {
+                                use std::sync::atomic::Ordering::Relaxed;
+                                for (i, name) in playback.mixer_names.iter().enumerate() {
+                                    let peak = f32::from_bits(playback.state.mixer_peaks[i / 32][i % 32].swap(0, Relaxed));
+                                    let clipped = playback.state.mixer_clipped[i / 32][i % 32].load(Relaxed);
+                                    ui.add(egui::ProgressBar::new(peak.clamp(0., 1.)).fill(self.palette.selection).text(format!("{name} · clipped {clipped}")))
+                                        .on_hover_text(format!("Sample peak {:.1} dBFS", 20. * peak.max(1e-6).log10()));
+                                }
+                            });
                         }
                         egui::CollapsingHeader::new("Live waveform").default_open(true).show(ui, |ui| {
                             let previous = self.scope_source;

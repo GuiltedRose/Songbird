@@ -1,6 +1,6 @@
 [package]
 name = "songbird"
-version = "0.5.0"
+version = "0.8.0"
 edition = "2024"
 license = "BSD-3-Clause"
 description = "Offline code-driven audio and singing workstation"

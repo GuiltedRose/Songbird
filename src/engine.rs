@@ -4,7 +4,7 @@ use crate::{
     language::{self, Clip, Event, Score, Track},
     voice::{self, LoadedBank, VocalUnit},
 };
-use anyhow::{Result, ensure};
+use anyhow::{Context, Result, ensure};
 use std::{collections::BTreeMap, path::Path};
 pub struct PreparedClip {
     pub spec: Clip,
@@ -37,6 +37,7 @@ struct Checkpoint {
     position: u64,
     tracks: Vec<TrackState>,
     master: Vec<Processor>,
+    mixer: Option<crate::mixer::Mixer>,
 }
 pub struct Renderer {
     initial: Option<Box<Checkpoint>>,
@@ -56,6 +57,9 @@ pub struct Renderer {
     pub peak: f32,
     pub clipped: u64,
     pub channel_peaks: Vec<f32>,
+    pub channel_clipped: Vec<u64>,
+    pub channel_reduction: Vec<f32>,
+    pub mixer: Option<crate::mixer::Mixer>,
     last_frame: [f32; 2],
     transition: Option<([f32; 2], u32)>,
 }
@@ -64,6 +68,43 @@ impl Renderer {
         let clock = score.clock()?;
         crate::studio::apply_presets(root, &mut score)?;
         ensure!(score.tracks.len() <= 128, "expanded track limit 128");
+        ensure!(
+            score
+                .tracks
+                .iter()
+                .all(|t| t.bypassed.iter().all(|&i| i > 0 && i <= t.effects.len())),
+            "unknown bypassed insert after preset expansion"
+        );
+        let effect_count = score
+            .mixer
+            .iter()
+            .map(|n| n.controls.effects.len())
+            .sum::<usize>()
+            + score.master.len()
+            + score
+                .tracks
+                .iter()
+                .map(|t| t.effects.len() + t.clips.iter().map(|c| c.effects.len()).sum::<usize>())
+                .sum::<usize>();
+        ensure!(effect_count <= 256, "project effect limit 256");
+        let state_estimate: usize = score
+            .master
+            .iter()
+            .chain(score.tracks.iter().flat_map(|t| &t.effects))
+            .chain(
+                score
+                    .tracks
+                    .iter()
+                    .flat_map(|t| t.clips.iter().flat_map(|c| &c.effects)),
+            )
+            .chain(score.mixer.iter().flat_map(|n| &n.controls.effects))
+            .map(|effect| dsp::estimated_state_bytes(effect, score.rate))
+            .sum();
+        ensure!(
+            state_estimate <= 64 * 1024 * 1024,
+            "effect checkpoint state exceeds 64 MiB"
+        );
+        let mixer = crate::mixer::Mixer::compile(&score)?;
         let used = score
             .tracks
             .iter()
@@ -102,13 +143,6 @@ impl Renderer {
             }
         }
 
-        let effect_count = score.master.len()
-            + score
-                .tracks
-                .iter()
-                .map(|t| t.effects.len() + t.clips.iter().map(|c| c.effects.len()).sum::<usize>())
-                .sum::<usize>();
-        ensure!(effect_count <= 256, "project effect limit 256");
         ensure!(
             score
                 .tracks
@@ -149,6 +183,14 @@ impl Renderer {
             } else {
                 spec.cycles as f64
             };
+            if let Some(label) = &spec.drum_only {
+                ensure!(
+                    spec.instrument == "drumkit"
+                        && (dsp::DRUM_NAMES.contains(&crate::strudel::drum_alias(label))
+                            || spec.drums.contains_key(label)),
+                    "drum-only requires a drumkit and a known drum/sample label: {label}"
+                );
+            }
             let mut events = if spec.mini {
                 crate::mini::Pattern::compile(&spec.sequence)
                     .and_then(|p| p.events(0., mini_cycles, spec.cycle_beats, spec.seed))
@@ -158,6 +200,16 @@ impl Renderer {
             } else {
                 language::events(&spec.sequence, spec.step)?
             };
+            if spec.mini {
+                crate::strudel::controls(&mut events, spec, mini_cycles)?;
+            }
+            for event in &mut events {
+                if let Some(name) = &mut event.drum
+                    && !spec.drums.contains_key(name)
+                {
+                    *name = crate::strudel::drum_alias(name).into();
+                }
+            }
             let cycle = if spec.mini {
                 mini_cycles * spec.cycle_beats
             } else {
@@ -167,7 +219,7 @@ impl Renderer {
                 for e in &events {
                     if let Some(label) = &e.drum {
                         ensure!(
-                            ["kick", "snare", "hat", "clap"].contains(&label.as_str())
+                            dsp::DRUM_NAMES.contains(&label.as_str())
                                 || spec.drums.contains_key(label),
                             "track {:?}: mini sample {label:?} has no drum mapping",
                             spec.name
@@ -210,7 +262,7 @@ impl Renderer {
                     }));
                 }
             }
-            let schedule: Vec<Event> = if score.tempo_map.is_empty() {
+            let mut schedule: Vec<Event> = if score.tempo_map.is_empty() {
                 events.clone()
             } else {
                 let base = clock.beat(spec.at);
@@ -291,6 +343,48 @@ impl Renderer {
                     furthest
                 })
                 .collect();
+            // Compatibility sound events play a bounded source tail independently of
+            // pattern speed. Sampler end is a fraction of the actual local sample.
+            for event in &mut schedule {
+                if let Some(playback) = &event.playback {
+                    let name = event
+                        .drum
+                        .as_deref()
+                        .context("sound event needs percussion")?;
+                    let whole = drums
+                        .get(name)
+                        .map_or_else(|| dsp::drum_duration(name), |asset| asset.duration());
+                    ensure!(
+                        whole.is_finite() && whole > 0.,
+                        "sound-expression source must contain finite nonempty audio"
+                    );
+                    let mut seconds = whole * playback.end;
+                    if let Some(decay) = playback.decay.filter(|_| playback.sustain == 0.) {
+                        seconds = seconds.min(decay as f64 + 0.0005);
+                    }
+                    ensure!(
+                        seconds.is_finite() && seconds <= 30.,
+                        "sound-expression playback tails are limited to 30 seconds; shorten end/decay"
+                    );
+                    event.duration = seconds * score.tempo / 60.;
+                }
+            }
+            if spec.mini_sound || !spec.mini_controls.is_empty() {
+                let longest = schedule
+                    .iter()
+                    .map(|event| event.duration)
+                    .fold(0f64, f64::max);
+                let mut first = 0;
+                for (index, event) in schedule.iter().enumerate() {
+                    while first < index && schedule[first].beat + longest < event.beat {
+                        first += 1;
+                    }
+                    ensure!(
+                        index - first < 64,
+                        "sound expression is too dense for its playback tails; shorten end/decay or reduce speed (64 candidates per tail window)"
+                    );
+                }
+            }
             tracks.push(PreparedTrack {
                 phases,
                 unit_ends,
@@ -302,7 +396,7 @@ impl Renderer {
                 clips,
                 bank,
                 units,
-                effects: dsp::effects(&spec.effects, score.rate),
+                effects: dsp::effects_bypassed(&spec.effects, &spec.bypassed, score.rate),
                 drums,
             });
         }
@@ -326,14 +420,21 @@ impl Renderer {
             peak: 0.,
             clipped: 0,
             channel_peaks: vec![0.; score.tracks.len()],
+            channel_clipped: vec![0; score.tracks.len()],
+            channel_reduction: vec![0.; score.tracks.len()],
+            mixer,
             last_frame: [0.; 2],
             transition: None,
         };
         let state_bytes = renderer
-            .master
-            .iter()
-            .map(Processor::state_bytes)
-            .sum::<usize>()
+            .mixer
+            .as_ref()
+            .map_or(0, crate::mixer::Mixer::state_bytes)
+            + renderer
+                .master
+                .iter()
+                .map(Processor::state_bytes)
+                .sum::<usize>()
             + renderer
                 .tracks
                 .iter()
@@ -383,8 +484,16 @@ impl Renderer {
         for frame in &mut out[..count] {
             let time = self.position as f64 / rate as f64;
             let mut mix = [0.; 2];
+            if let Some(mixer) = &mut self.mixer {
+                mixer.begin_frame();
+            }
             for (channel, t) in self.tracks.iter_mut().enumerate() {
-                if t.spec.mute || (solo && !t.spec.solo) {
+                if t.spec.mute
+                    || self
+                        .mixer
+                        .as_ref()
+                        .map_or(solo && !t.spec.solo, |m| !m.track_audible(channel))
+                {
                     continue;
                 }
                 let local = time - t.spec.at;
@@ -466,6 +575,16 @@ impl Renderer {
                             }
                             let mut value = 0.;
                             if let Some(drum) = &e.drum {
+                                if t.spec.drum_only.as_ref().is_some_and(|selected| {
+                                    let selected = if t.spec.drums.contains_key(selected) {
+                                        selected.as_str()
+                                    } else {
+                                        crate::strudel::drum_alias(selected)
+                                    };
+                                    selected != drum
+                                }) {
+                                    continue;
+                                }
                                 if let Some(a) = t.drums.get_mut(drum) {
                                     let v = a.sample(
                                         elapsed * a.rate as f64,
@@ -521,6 +640,17 @@ impl Renderer {
                                     }
                                 }
                             }
+                            if let Some(playback) = &e.playback
+                                && let Some(decay) = playback.decay
+                            {
+                                let phase = ((elapsed - 0.0005).max(0.) as f32 / decay.max(1e-9))
+                                    .clamp(0., 1.);
+                                value *= 1. - (1. - playback.sustain) * phase;
+                            }
+                            if e.playback.is_some() {
+                                value *= (elapsed / 0.0005).clamp(0., 1.) as f32
+                                    * ((duration - elapsed) / 0.002).clamp(0., 1.) as f32;
+                            }
                             x[0] += value;
                             x[1] += value;
                         }
@@ -555,11 +685,29 @@ impl Renderer {
                     }
                 }
                 dsp::apply(&mut x, &mut t.effects);
+                let reduction = t
+                    .effects
+                    .iter()
+                    .chain(t.clips.iter().flat_map(|c| &c.effects))
+                    .map(|e| e.reduction_db)
+                    .fold(0f32, f32::max);
+                self.channel_reduction[channel] = self.channel_reduction[channel].max(reduction);
                 x = dsp::pan(x, pan);
                 self.channel_peaks[channel] =
                     self.channel_peaks[channel].max((x[0] * gain).abs().max((x[1] * gain).abs()));
-                mix[0] += x[0] * gain;
-                mix[1] += x[1] * gain;
+                let post = [x[0] * gain, x[1] * gain];
+                if post[0].abs().max(post[1].abs()) > 1. {
+                    self.channel_clipped[channel] += 1;
+                }
+                if let Some(mixer) = &mut self.mixer {
+                    mixer.track(channel, x, post, &mut mix);
+                } else {
+                    mix[0] += post[0];
+                    mix[1] += post[1];
+                }
+            }
+            if let Some(mixer) = &mut self.mixer {
+                mixer.process(time, &mut mix)?;
             }
             dsp::apply(&mut mix, &mut self.master);
             if self.metronome {
@@ -679,6 +827,7 @@ impl Renderer {
         Checkpoint {
             position: self.position,
             master: self.master.clone(),
+            mixer: self.mixer.clone(),
             tracks: self
                 .tracks
                 .iter()
@@ -694,6 +843,9 @@ impl Renderer {
     fn restore(&mut self, state: &Checkpoint) {
         self.position = state.position;
         self.master.clone_from(&state.master);
+        if let (Some(mixer), Some(saved)) = (&mut self.mixer, &state.mixer) {
+            mixer.restore_state(saved);
+        }
         for (t, s) in self.tracks.iter_mut().zip(&state.tracks) {
             t.phases.clone_from(&s.phases);
             t.units.clone_from(&s.units);

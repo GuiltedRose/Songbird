@@ -62,6 +62,8 @@ pub fn stems(root: &Path, score: &Score, directory: &Path) -> Result<Vec<Report>
         stem.tracks[0].mute = false;
         stem.tracks[0].solo = false;
         stem.master.clear();
+        stem.mixer.clear();
+        stem.tracks[0].routing = Default::default();
         let name: String = track
             .name
             .chars()
