@@ -173,7 +173,8 @@ impl Renderer {
                     "drumkit",
                     "sample"
                 ]
-                .contains(&spec.instrument.as_str()),
+                .contains(&spec.instrument.as_str())
+                    || crate::instruments::NAMES.contains(&spec.instrument.as_str()),
                 "unknown instrument {}",
                 spec.instrument
             );
@@ -347,6 +348,12 @@ impl Renderer {
             // pattern speed. Sampler end is a fraction of the actual local sample.
             for event in &mut schedule {
                 if let Some(playback) = &event.playback {
+                    if event.drum.is_none() {
+                        // Pitched sounds retain their musical gate, including
+                        // tempo-map conversion; end shortens that gate only.
+                        event.duration *= playback.end;
+                        continue;
+                    }
                     let name = event
                         .drum
                         .as_deref()
@@ -621,7 +628,7 @@ impl Renderer {
                                             + pitch_env,
                                     );
                                     if freq < rate as f64 / 2. {
-                                        value += dsp::oscillator(
+                                        value += dsp::instrument(
                                             &t.spec.instrument,
                                             {
                                                 let phase = &mut t.phases[event_index][note_index];
@@ -629,12 +636,19 @@ impl Renderer {
                                                     *phase = 0.;
                                                 }
                                                 let current = *phase;
-                                                *phase = (*phase + freq / rate as f64).fract();
+                                                let next = *phase + freq / rate as f64;
+                                                *phase = if crate::instruments::NAMES
+                                                    .contains(&t.spec.instrument.as_str()) {
+                                                    next
+                                                } else {
+                                                    next.fract()
+                                                };
                                                 current
                                             },
                                             freq,
                                             rate,
                                             (elapsed * rate as f64) as u64,
+                                            elapsed,
                                         ) * dsp::envelope(elapsed, duration, &t.spec)
                                             * 0.22;
                                     }

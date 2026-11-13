@@ -1072,7 +1072,7 @@ fn parse_track(
             );
             t.harmonies = h;
         }
-        "synth" => t.instrument = arg(v, 1)?.into(),
+        "synth" => t.instrument = crate::instruments::alias(arg(v, 1)?).into(),
         "instrument" => {
             let name = arg(v, 1)?;
             if let Some(base) = instruments.get(name) {
@@ -1080,7 +1080,7 @@ fn parse_track(
                 *t = base.clone();
                 t.name = track_name;
             } else {
-                t.instrument = name.into();
+                t.instrument = crate::instruments::alias(name).into();
             }
         }
         "drum" => {

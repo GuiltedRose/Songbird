@@ -70,7 +70,12 @@ integrate quarter-note durations into elapsed seconds.
 ## Instruments and tracks
 
 Built-ins: `sine`, `saw`, `square`, `triangle`, `noise`, `analog` (saw),
-`soft-lead` (sine), `drumkit`, `sample`. Saw and square use polyBLEP; triangle
+`soft-lead` (sine), `drumkit`, `sample`, plus the 20 pitched voices in the
+[native instrument bank](SOUNDS.md): piano, electric-piano, organ, accordion,
+acoustic-guitar, nylon-guitar, electric-guitar, banjo, mandolin, upright-bass,
+electric-bass, violin, cello, strings, flute, clarinet, saxophone, trumpet,
+marimba, and vibraphone. Use `instrument NAME` or `synth NAME` with the existing
+note syntax. Saw and square use polyBLEP; triangle
 uses a bounded band-limited harmonic sum. Drum tokens are `kick`, `snare`, `hat`,
 and `clap`, with deterministic procedural defaults. Load your own kit:
 

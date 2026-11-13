@@ -1,0 +1,12 @@
+project "Porch Strings"
+tempo 104
+signature 4/4
+bars 8
+rate 48000
+bits 24
+master limit -1
+
+track guitar { instrument acoustic-guitar; notes "[C3,E3,G3]:1 -:1 [F3,A3,C4]:1 [G3,B3,D4]:1"; loop; gain -12db; pan -0.25 }
+track banjo { instrument banjo; notes "C4:0.5 E4:0.5 G4:0.5 E4:0.5 F4:0.5 A4:0.5 G4:0.5 D4:0.5"; loop; gain -15db; pan 0.25 }
+track bass { instrument upright-bass; notes "C2:1 G2:1 F2:1 G2:1"; loop; gain -9db }
+track fiddle { instrument violin; notes "E4:2 G4:2 A4:2 G4:2"; loop; adsr 0.03 0.1 0.8 0.15; gain -12db; reverb 0.12 }

@@ -122,9 +122,11 @@ fn expression(text: &str) -> Result<String> {
     let mut parser = Expression { text, at: 0 };
     let constructor = parser.name()?;
     ensure!(
-        ["s", "sound"].contains(&constructor.as_str()),
-        "expected s or sound constructor"
+        ["s", "sound", "note"].contains(&constructor.as_str()),
+        "expected s, sound, or note constructor"
     );
+    let pitched = constructor == "note";
+    let mut instrument = None;
     let mut pattern = parser.argument()?;
     let mut controls: Vec<Control> = Vec::new();
     let mut methods = 0;
@@ -140,6 +142,25 @@ fn expression(text: &str) -> Result<String> {
         methods += 1;
         ensure!(methods <= 16, "maximum 16 chained functions");
         match method.as_str() {
+            "s" | "sound" if pitched => {
+                let name = crate::instruments::alias(&value);
+                ensure!(
+                    crate::instruments::NAMES.contains(&name)
+                        || [
+                            "sine",
+                            "saw",
+                            "square",
+                            "triangle",
+                            "noise",
+                            "analog",
+                            "soft-lead",
+                            "sample"
+                        ]
+                        .contains(&name),
+                    "note().s() requires one pitched instrument name"
+                );
+                instrument = Some(value);
+            }
             "fast" | "slow" => {
                 let factor: f64 = value
                     .parse()
@@ -172,10 +193,20 @@ fn expression(text: &str) -> Result<String> {
         }
     }
     crate::mini::Pattern::compile(&pattern)?;
-    let mut output = format!(
-        "notation mini\ninstrument drumkit\npattern {}\nmini-sound\n",
-        quoted(&pattern)
-    );
+    let mut output = if pitched {
+        let selected = instrument.map_or(String::new(), |name| {
+            format!("instrument {}\n", quoted(&name))
+        });
+        format!(
+            "notation mini\n{selected}notes {}\nmini-sound\n",
+            quoted(&pattern)
+        )
+    } else {
+        format!(
+            "notation mini\ninstrument drumkit\npattern {}\nmini-sound\n",
+            quoted(&pattern)
+        )
+    };
     for control in controls {
         crate::mini::Pattern::compile(&control.pattern)?;
         output.push_str(&format!(
@@ -207,7 +238,7 @@ pub fn translate(source: &str) -> Result<String> {
         let function_end = candidate
             .find(|c: char| !c.is_ascii_alphabetic())
             .unwrap_or(candidate.len());
-        let starts = ["s", "sound"].contains(&&candidate[..function_end])
+        let starts = ["s", "sound", "note"].contains(&&candidate[..function_end])
             && candidate[function_end..].trim_start().starts_with('(');
         if !quote && starts {
             let mut text = candidate.to_owned();
@@ -299,13 +330,17 @@ pub fn controls(
         return Ok(());
     }
     ensure!(
-        track.mini && track.instrument == "drumkit",
-        "sound constructors and sampler controls require a Mini drumkit track"
+        track.mini && track.voice.is_none(),
+        "sound/note constructors require a Mini instrumental track"
     );
     for event in events.iter_mut() {
         ensure!(
-            event.drum.is_some(),
-            "s/sound expects percussion names; use native notes for pitched instruments"
+            if track.instrument == "drumkit" {
+                event.drum.is_some()
+            } else {
+                event.drum.is_none() && !event.notes.is_empty()
+            },
+            "sound patterns require percussion labels on drumkit tracks and pitches on instrumental tracks"
         );
         event.playback = Some(Playback {
             end: 1.,

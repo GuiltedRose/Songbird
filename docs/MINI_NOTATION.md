@@ -38,7 +38,15 @@ Exports render the arrangement once, including explicitly scheduled pattern loop
 | `{kick snare, hat*3}%8` | Align branches to an eight-step cycle |
 | `{c4 e4 g4, c3 g3}` | Default polymeter length is the LCM (six steps) |
 | `hat?0.1` | Remove events with probability 0.1 |
-| `c4\|e4\|g4` | Seeded random choice per local cycle |
+
+Use `c4|e4|g4` for a seeded random choice per local cycle. For example:
+
+```text
+track random_keys {
+    note("c4|e4|g4").s("ep")
+    loop
+}
+```
 
 Postfix operators bind to the preceding atom/group and apply left to right.
 Whitespace makes a sequence; `|` chooses among sequences; commas stack branches.
@@ -51,11 +59,60 @@ notation/constructor documentation leaves details open.
 Semantics were checked against the official [mini-notation reference](https://strudel.cc/learn/mini-notation/)
 and [pattern constructors](https://strudel.cc/learn/factories/). Songbird implements
 this documented subset, not the JavaScript Pattern API or all Strudel syntax.
-Decimal speed factors are accepted. Negative speed, underscore elongation,
+Decimal speed factors from 1/64 through 64 (inclusive) are accepted for `*`, `/`,
+`.fast()` and `.slow()`; write fractions as decimals, such as `0.5`.
+Negative speed, underscore elongation,
 general parameter-valued operators and arbitrary JS expressions are not supported.
 The limited sound-constructor/control frontend documented below is available.
 
 ## Instruments, singers and editing
+
+All 20 voices in the [instrument bank](SOUNDS.md) support pitched Mini patterns,
+as do the existing synth waveforms and pitched local samples. Select
+`notation mini` and use `notes`, or use the shorthand constructor:
+
+```text
+track guitar {
+    note("[c3,e3,g3] ~ [f3,a3,c4] <g3 a3>").s("ag")
+    loop
+    gain -12db
+}
+track strings {
+    instrument strings
+    notation mini
+    notes "[c4,e4,g4] <[f4,a4,c5] [g4,b4,d5]>"
+    loop
+    gain -15db
+}
+```
+
+`note(PATTERN).s(INSTRUMENT)` (or `.sound(INSTRUMENT)`) selects one fixed
+instrument, including piano, guitars, basses, bowed strings, winds, brass,
+organ, accordion, and mallets. Without `.s()`, `note()` keeps the track's
+instrument (sine by default). Instrument-name patterns and JavaScript evaluation
+are not supported. `sample` requires a declared local sample using existing
+track directives; the constructor does not fetch or create samples. Singers
+continue to use native `notation mini` with their voice/lyric directives.
+
+Compound instrument names have two-letter aliases: `ag` (acoustic-guitar),
+`ng` (nylon-guitar), `eg` (electric-guitar), `ep` (electric-piano),
+`eb` (electric-bass), `ub` (upright-bass), and `sl` (soft-lead).
+For example, `note("c4 <e4 g4>").s("ag")`. These aliases also work with
+native `instrument` and `synth`; full names remain supported. Explicitly defined
+native instruments take priority over built-in aliases. Percussion already uses
+`oh`, `ht`, `mt`, and `lt` for open-hat, high-tom, mid-tom, and low-tom.
+
+Pitched constructors accept `.fast`, `.slow`, `.end`, `.dec`/`.decay`, and
+`.sus`/`.sustain`. `.end` multiplies each note's musical gate by 0..1; it does
+not extend a note or change subsequent onset timing. Decay/sustain multiply the
+instrument's natural envelope and the track ADSR inside that gate. Percussion
+constructors retain their source-tail behavior. Use native `cycle`, `cycles`,
+`seed`, `loop`, transpose, pan, gain, and effects alongside either constructor.
+
+Standalone `$: note("c4 <e4 g4>").s("piano")` creates a looping track, just like
+standalone percussion constructors. Open `examples/mini-instruments` for a mixed
+acoustic ensemble. A constructor must occupy its own source line; chained methods
+can continue on lines beginning with `.`. Legacy notation remains unchanged.
 
 Pitches require octaves. Drum names `kick`, `snare`, `hat`, `clap` use existing
 synthesis. Add `drum hit "samples/hit.wav"` to trigger a local sample as `hit`.
@@ -134,7 +191,8 @@ gain, instrument definitions, arrangement and exports remain available. A bare
 standalone `s(...)` or `$: s(...)` creates an automatically named looping percussion
 track for the arrangement. Inside an explicit track, `cycles`/`loop` retain their
 normal meaning. For multiple cycles in a non-looping track, declare `cycles`.
-`sound(...)` is an alias of `s(...)`; single/double quoted pattern strings work.
+`sound(...)` is an alias of `s(...)`. Constructor arguments accept single or
+double quotes; native directives such as `notes` and `sample` use double quotes.
 Chained calls can continue on following lines beginning with `.`. Standalone
 constructors also work inside native sections. Use an explicitly named track when
 other composition code needs a stable routing/source name. Native statements
@@ -144,9 +202,10 @@ Supported chained methods:
 
 | Method | Meaning |
 |---|---|
+| `.s(NAME)` / `.sound(NAME)` | Select one pitched instrument after `note(...)` |
 | `.fast(NUMBER)` | Speed up the entire preceding expression; equivalent to grouping and `*NUMBER` |
 | `.slow(NUMBER)` | Slow down the preceding expression with `/NUMBER` |
-| `.end(NUMBER_OR_PATTERN)` | Play a fraction of the local source, from 0 to 1 |
+| `.end(NUMBER_OR_PATTERN)` | Play a fraction of the percussion source or pitched note gate, from 0 to 1 |
 | `.dec(SECONDS_OR_PATTERN)` / `.decay(...)` | Decay from the initial peak toward sustain over the specified seconds |
 | `.sustain(LEVEL_OR_PATTERN)` / `.sus(...)` | Sustain level from 0 to 1 for the decay envelope |
 
@@ -162,29 +221,39 @@ Existing full identifiers such as `kick`, `snare`, `hat` and `clap` still work.
 
 Numeric end/decay/sustain patterns use the same bounded Mini parser, including
 alternation, subdivisions, repetitions and seeded choices. They must supply one
-numeric value at every sound onset; ambiguous overlapping control values or
-missing values are errors. End/sustain ranges are 0–1, decay 0–10 seconds, scalar
-speed factors (0,1024]. Chain order matters: a subsequent fast/slow also transforms
+numeric value at every sound onset. Decimal values accept both `.1` and `0.1`,
+including inside patterns such as `.end("<0.1 0.2 0.5 1>")`. Ambiguous overlapping
+control values or missing values are errors. End/sustain ranges are 0–1,
+decay 0–10 seconds, scalar
+speed factors 1/64–64 inclusive. At most 16 chained methods are accepted.
+Constructor arguments are limited to 8192 bytes, including pattern strings;
+native `notes`/`pattern` Mini expressions allow up to 64 KiB.
+Chain order matters: a subsequent fast/slow also transforms
 previous control patterns; a control added afterward keeps its own cycle timing.
 Unsupported functions and arithmetic expressions produce errors, not partial
 JavaScript execution.
 
-These constructors currently trigger percussion/local drum samples. Continue to
-use native synth/notes directives for pitched instruments and singing. They do
-not implement the complete Strudel Pattern API. The familiar spellings follow
+`s(...)`/`sound(...)` trigger percussion and local drum samples;
+`note(...).s(...)` triggers pitched instruments and declared local pitched samples.
+Singing uses native voice/lyrics directives with `notation mini`. These
+constructors do not implement the complete Strudel Pattern API. The familiar spellings follow
 [Strudel time modifiers](https://strudel.cc/learn/time-modifiers/),
 [sampler end](https://strudel.cc/learn/samples/#end), and
 [decay/sustain controls](https://strudel.cc/learn/effects/#decay); native audio
 sources and envelope defaults remain Songbird's own.
 
 Legacy bare native/Mini patterns keep their previous event-duration gating. The
-opt-in sound constructor plays each source tail independently of step duration:
+opt-in percussion constructor plays each source tail independently of step duration:
 end is a fraction of the actual local file, or a procedural voice's finite natural
 tail (its slowest envelope's -80 dB point). Percussion sustain defaults to zero;
 a declared decay therefore reaches silence unless sustain is raised. Short edge
 fades (0.5 ms attack, 2 ms release) reduce truncation clicks. Tails are bounded to
 30 seconds, and preparation rejects patterns with more than 64 event candidates
 inside their longest-tail window. Shorten end/decay or reduce speed on overload.
+Pitched constructors instead keep each note's musical duration, shortened by
+`.end()` when specified. They do not acquire a percussion source tail or the
+30-second percussion-tail limit. Their preparation still applies the 64-candidate
+density check within the longest note window. The same short edge fades apply.
 All expansion, aliases and control patterns resolve during preparation, outside
 CPAL. Source files, saved compositions and existing Mini syntax are preserved.
 

@@ -1,0 +1,12 @@
+project "Small Room"
+tempo 76
+signature 4/4
+bars 8
+rate 48000
+bits 24
+master limit -1
+
+track piano { instrument piano; notes "[C3,Eb3,G3]:2 [Ab2,C3,Eb3]:2 [F2,Ab2,C3]:2 [G2,B2,D3]:2"; loop; gain -12db; reverb 0.18 }
+track cello { instrument cello; notes "C2:2 Ab2:2 F2:2 G2:2"; loop; adsr 0.06 0.1 0.85 0.2; gain -11db; pan -0.2 }
+track violin { instrument violin; notes "G4:2 Ab4:1 G4:1 F4:2 D4:2"; loop; adsr 0.04 0.1 0.8 0.2; gain -14db; pan 0.2; reverb 0.15 }
+track flute { instrument flute; notes "-:4 C5:1 Eb5:1 D5:1 B4:1"; loop; gain -14db; reverb 0.15 }

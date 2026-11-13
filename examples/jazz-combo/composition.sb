@@ -1,0 +1,12 @@
+project "Late Table"
+tempo 112
+signature 4/4
+bars 8
+rate 48000
+bits 24
+master limit -1
+
+track keys { instrument electric-piano; notes "[C4,Eb4,G4,Bb4]:2 [F3,A3,C4,Eb4]:2 [Bb3,D4,F4,A4]:2 [G3,B3,D4,F4]:2"; loop; gain -13db; reverb 0.12 }
+track bass { instrument upright-bass; notes "C2:1 Eb2:1 F2:1 A2:1 Bb2:1 D3:1 G2:1 B2:1"; loop; gain -9db }
+track sax { instrument saxophone; notes "G4:0.5 Bb4:0.5 C5:1 -:1 Eb5:1 D5:2 Bb4:1 G4:1"; loop; adsr 0.01 0.08 0.85 0.08; gain -14db }
+track kit { instrument drumkit; pattern "ride hat ride snare ride hat ride snare"; loop; gain -19db }

@@ -187,7 +187,10 @@ fn synths_are_finite_and_audible() {
         "noise",
         "analog",
         "soft-lead",
-    ] {
+    ]
+    .into_iter()
+    .chain(songbird::instruments::NAMES.iter().copied())
+    {
         let b = rendered(&format!(
             "rate 16000;bars 1;track x {{synth {kind};notes \"C4:4\"}}"
         ));
@@ -196,6 +199,20 @@ fn synths_are_finite_and_audible() {
         assert!(energy > 1., "{kind}: {energy}");
     }
 }
+#[test]
+fn instrument_bank_examples_prepare_without_external_assets() {
+    let fixture = Fixture::new();
+    for source in [
+        include_str!("../examples/instrument-bank/composition.sb"),
+        include_str!("../examples/folk-band/composition.sb"),
+        include_str!("../examples/jazz-combo/composition.sb"),
+        include_str!("../examples/chamber/composition.sb"),
+    ] {
+        let score = language::parse(source).unwrap();
+        Renderer::prepare(&fixture.0, score).unwrap();
+    }
+}
+
 #[test]
 fn scheduling_and_loop() {
     let b = rendered("rate 16000;tempo 120;bars 1;track a { notes \"- C4\";step 1;loop }");

@@ -321,6 +321,22 @@ recover edits. It runs before the editor exists and never replaces an unsaved
 editor document. Config write failures are reported in the console without
 discarding the active project. Other config preferences are retained.
 
+## Native instrument bank (0.9.0)
+
+Songbird includes 20 additional synthesized instruments for folk, country,
+jazz, rock, soul, chamber, and cinematic arrangements. Select them with the
+existing `instrument NAME` syntax; see the [sound catalogue](docs/SOUNDS.md)
+for the complete bank and sound-design details. These are procedural voices,
+not recorded acoustic instruments.
+
+Pitched Mini shorthand is also available: `note("c4 <e4 g4>").s("piano")`.
+All bank instruments support native Mini note patterns; see
+[Mini notation](docs/MINI_NOTATION.md) and `examples/mini-instruments`.
+
+Open `examples/instrument-bank` to audition every voice, or start from
+`examples/folk-band`, `examples/jazz-combo`, or `examples/chamber`.
+See [0.9.0 release and operator checks](docs/RELEASE_0_9_0.md).
+
 ## Customize the theme
 
 Songbird finds its config automatically:

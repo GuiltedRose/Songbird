@@ -1,5 +1,6 @@
 [Desktop Entry]
 Name=Songbird
+Icon=songbird
 Comment=Offline live-coded audio and singing workstation
 Exec=songbird
 Terminal=false

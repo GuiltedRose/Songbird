@@ -266,9 +266,10 @@ impl<'a> Parser<'a> {
                 note(token).with_context(|| format!("invalid mini pitch {token:?}"))?;
             } else {
                 ensure!(
-                    token
-                        .chars()
-                        .all(|c| c.is_alphanumeric() || c == '_' || c == '-'),
+                    token.parse::<f64>().is_ok_and(|value| value.is_finite())
+                        || token
+                            .chars()
+                            .all(|c| c.is_alphanumeric() || c == '_' || c == '-'),
                     "invalid mini label {token:?}"
                 );
             }

@@ -2,6 +2,7 @@ pub mod audio;
 pub mod codec;
 pub mod config;
 pub mod dsp;
+pub mod instruments;
 pub mod engine;
 pub mod gui;
 pub mod language;

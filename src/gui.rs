@@ -267,6 +267,8 @@ pub struct App {
     readout_seconds: f64,
     readout_levels: [f32; 2],
     readout_pending: [f32; 2],
+    track_readout: PeakReadout<128>,
+    mixer_readout: PeakReadout<64>,
     pub output_peak: f32,
     pub input_peak: f32,
 }
@@ -352,6 +354,8 @@ impl App {
             readout_seconds: 0.,
             readout_levels: [0.; 2],
             readout_pending: [0.; 2],
+            track_readout: PeakReadout::default(),
+            mixer_readout: PeakReadout::default(),
             output_peak: 0.,
             input_peak: 0.,
         };
@@ -1336,6 +1340,27 @@ fn push_sample(
         *peak = 0.;
     }
 }
+struct PeakReadout<const N: usize> {
+    pending: [f32; N],
+    levels: [f32; N],
+}
+impl<const N: usize> Default for PeakReadout<N> {
+    fn default() -> Self {
+        Self {
+            pending: [0.; N],
+            levels: [0.; N],
+        }
+    }
+}
+impl<const N: usize> PeakReadout<N> {
+    fn observe(&mut self, index: usize, peak: f32) {
+        self.pending[index] = self.pending[index].max(peak);
+    }
+    fn publish(&mut self) {
+        self.levels = self.pending;
+        self.pending.fill(0.);
+    }
+}
 fn push_peak(peaks: &mut std::collections::VecDeque<f32>, peak: f32) {
     if peaks.len() == 512 {
         peaks.pop_front();
@@ -1845,6 +1870,26 @@ impl eframe::App for App {
             self.scope_samples = 0;
         }
         // Hold interval peaks so readable numbers do not hide short transients.
+        // Drain independently of panel visibility so reopening a panel cannot
+        // show peaks accumulated while it was hidden.
+        if let Some(playback) = &self.playback {
+            use std::sync::atomic::Ordering::Relaxed;
+            for index in 0..128 {
+                let peak = f32::from_bits(
+                    playback.state.track_peaks[index / 32][index % 32].swap(0, Relaxed),
+                );
+                self.track_readout.observe(index, peak);
+            }
+            for index in 0..64 {
+                let peak = f32::from_bits(
+                    playback.state.mixer_peaks[index / 32][index % 32].swap(0, Relaxed),
+                );
+                self.mixer_readout.observe(index, peak);
+            }
+        } else {
+            self.track_readout = PeakReadout::default();
+            self.mixer_readout = PeakReadout::default();
+        }
         self.readout_pending[0] = self.readout_pending[0].max(if self.playback.is_some() {
             self.output_peak
         } else {
@@ -1862,6 +1907,8 @@ impl eframe::App for App {
             });
             self.readout_levels = self.readout_pending;
             self.readout_pending = [0.; 2];
+            self.track_readout.publish();
+            self.mixer_readout.publish();
         }
         if self.playback.is_none() {
             self.readout_seconds = self.cursor_seconds;
@@ -2111,17 +2158,13 @@ impl eframe::App for App {
                                     },
                                     t.name
                                 ));
-                                if let Some(p) = &self.playback
-                                    && index < 128
+                                if self.playback.is_some() && index < 128
                                 {
-                                    let peak = f32::from_bits(
-                                        p.state.track_peaks[index / 32][index % 32]
-                                            .swap(0, std::sync::atomic::Ordering::Relaxed),
-                                    );
-                                    ui.label(format!(
-                                        "{:.1} dB{}",
+                                    let peak = self.track_readout.levels[index];
+                                    ui.monospace(format!(
+                                        "{:>6.1} dB {:4}",
                                         20. * peak.max(1e-6).log10(),
-                                        if peak >= 1. { " CLIP" } else { "" }
+                                        if peak >= 1. { "CLIP" } else { "" }
                                     ));
                                 }
                                 ui.small(format!(
@@ -2148,7 +2191,7 @@ impl eframe::App for App {
                             egui::CollapsingHeader::new("Mixer buses/channels").show(ui, |ui| {
                                 use std::sync::atomic::Ordering::Relaxed;
                                 for (i, name) in playback.mixer_names.iter().enumerate() {
-                                    let peak = f32::from_bits(playback.state.mixer_peaks[i / 32][i % 32].swap(0, Relaxed));
+                                    let peak = self.mixer_readout.levels[i];
                                     let clipped = playback.state.mixer_clipped[i / 32][i % 32].load(Relaxed);
                                     ui.add(egui::ProgressBar::new(peak.clamp(0., 1.)).fill(self.palette.selection).text(format!("{name} · clipped {clipped}")))
                                         .on_hover_text(format!("Sample peak {:.1} dBFS", 20. * peak.max(1e-6).log10()));
@@ -2475,13 +2518,18 @@ impl eframe::App for App {
     }
 }
 pub fn run(project: Project) -> Result<()> {
+    let icon = eframe::icon_data::from_png_bytes(include_bytes!("../Assets/songbird.png"))
+        .context("cannot decode bundled Songbird icon")?;
     let mut app = App::new(project);
     app.remember_project();
     let options = eframe::NativeOptions {
-        viewport: egui::ViewportBuilder::default().with_inner_size([
-            app.config.appearance.window_width,
-            app.config.appearance.window_height,
-        ]),
+        viewport: egui::ViewportBuilder::default()
+            .with_icon(icon)
+            .with_app_id("songbird")
+            .with_inner_size([
+                app.config.appearance.window_width,
+                app.config.appearance.window_height,
+            ]),
         ..Default::default()
     };
     eframe::run_native(
@@ -2526,6 +2574,23 @@ pub fn smoke(project: Project, bank: Option<String>) -> Result<()> {
 #[cfg(test)]
 mod regression_tests {
     use super::*;
+    #[test]
+    fn meter_readouts_hold_transients_until_the_next_interval() {
+        let mut meter = PeakReadout::<2>::default();
+        meter.observe(0, 1.2);
+        meter.observe(0, 0.1);
+        meter.observe(1, 0.4);
+        assert_eq!(meter.levels, [0., 0.]);
+        meter.publish();
+        assert_eq!(meter.levels, [1.2, 0.4]);
+        meter.observe(0, 0.2);
+        assert_eq!(meter.levels, [1.2, 0.4]);
+        meter.publish();
+        assert_eq!(meter.levels, [0.2, 0.]);
+        meter.publish();
+        assert_eq!(meter.levels, [0., 0.]);
+    }
+
     #[test]
     fn peaks_preserve_transients_and_stay_bounded() {
         assert_eq!(compact_peaks(&[0., -0.9, 0.2, 0.4], 2), vec![0.9, 0.4]);

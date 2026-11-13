@@ -44,6 +44,14 @@ pub fn oscillator(kind: &str, phase: f64, freq: f64, rate: u32, index: u64) -> f
     };
     x as f32
 }
+/// Shared voice path for live playback, preview, and offline export.
+pub fn instrument(kind: &str, phase: f64, freq: f64, rate: u32, index: u64, elapsed: f64) -> f32 {
+    if crate::instruments::NAMES.contains(&kind) {
+        crate::instruments::sample(kind, phase, freq, rate, elapsed)
+    } else {
+        oscillator(kind, phase, freq, rate, index)
+    }
+}
 pub fn envelope(t: f64, duration: f64, track: &Track) -> f32 {
     if t < 0. || t >= duration {
         return 0.;

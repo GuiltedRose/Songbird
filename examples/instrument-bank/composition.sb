@@ -1,0 +1,187 @@
+project "Songbird 0.9 Instrument Bank"
+tempo 100
+signature 4/4
+bars 20
+rate 48000
+bits 24
+master limit -1
+
+# piano: bar 1
+track voice1 {
+ instrument piano
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 0b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# electric-piano: bar 2
+track voice2 {
+ instrument electric-piano
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 4b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# organ: bar 3
+track voice3 {
+ instrument organ
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 8b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# accordion: bar 4
+track voice4 {
+ instrument accordion
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 12b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# acoustic-guitar: bar 5
+track voice5 {
+ instrument acoustic-guitar
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 16b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# nylon-guitar: bar 6
+track voice6 {
+ instrument nylon-guitar
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 20b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# electric-guitar: bar 7
+track voice7 {
+ instrument electric-guitar
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 24b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# banjo: bar 8
+track voice8 {
+ instrument banjo
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 28b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# mandolin: bar 9
+track voice9 {
+ instrument mandolin
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 32b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# upright-bass: bar 10
+track voice10 {
+ instrument upright-bass
+ notes "C3:1 E3:1 G3:1 C4:1"
+ at 36b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# electric-bass: bar 11
+track voice11 {
+ instrument electric-bass
+ notes "C3:1 E3:1 G3:1 C4:1"
+ at 40b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# violin: bar 12
+track voice12 {
+ instrument violin
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 44b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# cello: bar 13
+track voice13 {
+ instrument cello
+ notes "C3:1 E3:1 G3:1 C4:1"
+ at 48b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# strings: bar 14
+track voice14 {
+ instrument strings
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 52b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# flute: bar 15
+track voice15 {
+ instrument flute
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 56b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# clarinet: bar 16
+track voice16 {
+ instrument clarinet
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 60b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# saxophone: bar 17
+track voice17 {
+ instrument saxophone
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 64b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# trumpet: bar 18
+track voice18 {
+ instrument trumpet
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 68b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# marimba: bar 19
+track voice19 {
+ instrument marimba
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 72b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}
+
+# vibraphone: bar 20
+track voice20 {
+ instrument vibraphone
+ notes "C4:1 E4:1 G4:1 C5:1"
+ at 76b
+ adsr 0.002 0.08 0.9 0.06
+ gain -9db
+}

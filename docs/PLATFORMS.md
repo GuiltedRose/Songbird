@@ -111,3 +111,19 @@ build/audio confirmations apply to earlier code. VST3/CLAP/LV2 binary hosting,
 plugin GUIs, device MIDI and latency compensation remain unavailable on **all**
 platforms; there is no universal compatibility claim. See [status](STATUS.md) and
 [operator validation](OPERATIONS.md#routing-expansion-validation-and-rollback).
+
+## Application icon
+
+The desktop window embeds `Assets/songbird.png` in the executable. Rebuild and
+restart Songbird to use it; no external image file is needed at runtime.
+For the Linux launcher, with `songbird` on your PATH, run from the checkout:
+
+```sh
+install -Dm644 Assets/songbird.png "${XDG_DATA_HOME:-$HOME/.local/share}/icons/songbird.png"
+install -Dm644 packaging/songbird.desktop "${XDG_DATA_HOME:-$HOME/.local/share}/applications/songbird.desktop"
+```
+
+To roll back the launcher installation, remove those two installed files.
+Projects and preferences are unaffected. Desktop icon behavior varies by platform;
+macOS Finder and Windows Explorer executable icons require separate bundle/resource
+packaging beyond this window icon.
